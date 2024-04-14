@@ -13,14 +13,17 @@
 #include <algorithm>
 #include "SimConnect.h"
 
+// Define the SimConnect object and other global variables
 HRESULT hr;
-HANDLE  hSimConnect = NULL;
-int     quit = 0;
+HANDLE  hSimConnect     = NULL;
+bool    DEBUG           = FALSE;
+bool    minimizeOnStart = FALSE;
+int     quit            = 0;
 
 // Define a unique filename for the saved flight situation
-const char* szFileName = "Missions\\Custom\\CustomFlight\\CustomFlight";
-const char* szTitle = "FSAutoSave generated file";
-const char* szDescription = "This is a save of your last flight so you can resume exactly where you left.";
+const char* szFileName      = "Missions\\Custom\\CustomFlight\\CustomFlight";
+const char* szTitle         = "FSAutoSave generated file";
+const char* szDescription   = "This is a save of your last flight so you can resume exactly where you left.";
 
 // Global variables to hold the current states
 std::string currentAircraft;
@@ -31,22 +34,19 @@ std::string currentFlightPlanPath;
 std::string currentFlight;
 std::string currentFlightPath;
 
-// Debug flags
-std::string flagDEBUG;
-
 // Flags to control the application
-bool isOnMenuScreen = FALSE;        // Set TRUE when FLT FILE == MAINMENU.FLT
-bool isFlightPlanActive = FALSE;        // FALSE when Flight plan DEACTIVATED, TRUE when ACTIVATED
-bool wasReset = FALSE;        // TRUE when the sim was reset using SITUATION_RESET
-bool wasSoftPaused = FALSE;        // TRUE when the sim is entered in soft pause state for the player
-bool wasFullyPaused = FALSE;        // TRUE when the sim is entered a fully paused state for the player
-bool isFinalSave = FALSE;        // TRUE when the save is the last
-bool isFirstSave = FALSE;        // TRUE when the save is the first
-bool isPauseBeforeStart = FALSE;        // TRUE when the sim is paused before the start
-bool userLoadedPLN = FALSE;        // TRUE when the user loads a .PLN file to start a flight
+bool isOnMenuScreen     = FALSE;            // Set TRUE when FLT FILE == MAINMENU.FLT
+bool isFlightPlanActive = FALSE;            // FALSE when Flight plan DEACTIVATED, TRUE when ACTIVATED
+bool wasReset           = FALSE;            // TRUE when the sim was reset using SITUATION_RESET
+bool wasSoftPaused      = FALSE;            // TRUE when the sim is entered in soft pause state for the player
+bool wasFullyPaused     = FALSE;            // TRUE when the sim is entered a fully paused state for the player
+bool isFinalSave        = FALSE;            // TRUE when the save is the last
+bool isFirstSave        = FALSE;            // TRUE when the save is the first
+bool isPauseBeforeStart = FALSE;            // TRUE when the sim is paused before the start
+bool userLoadedPLN      = FALSE;            // TRUE when the user loads a .PLN file to start a flight
 
 // Realtime flags
-DWORD isSimRunning = 0;            // TRUE when the sim is running
+DWORD isSimRunning      = 0;                // TRUE when the sim is running
 
 #define PAUSE_STATE_FLAG_OFF 0              // No Pause
 #define PAUSE_STATE_FLAG_PAUSE 1            // Full Pause
@@ -268,7 +268,7 @@ void simStatus(bool running) {
     if (running) {
         if (currentFlight == "MAINMENU.FLT" || currentFlight == "") {
 
-            // Magenta for "ON MENU SCREEN"
+            // Green for "ON MENU SCREEN"
             printf("[SIM STATE] ********* \033[32m [ RUNNING ] \033[0m ********* -> (IS ON MENU SCREEN) \n");
 
             // Set the flag to TRUE when the flight plan is activated and if one is loaded by the user
@@ -286,7 +286,10 @@ void simStatus(bool running) {
             currentStatus();
 
             // Try to do a save and set ZULU time
-            saveAndSetZULU();
+            if(!DEBUG)
+                saveAndSetZULU();
+            else
+                printf("[DEBUG] WE ARE IN DEBUG MODE... Will NOT set local ZULU or trigger a SAVE\n\n");
         }
     }
     else {
@@ -294,6 +297,73 @@ void simStatus(bool running) {
         printf("[SIM STATE] ********* \033[31m [ STOPPED ] \033[0m *********\n");
         currentStatus();
     }
+}
+
+// This function is KEY to handle all edge cases when resuming a flight. CAREFUL WHEN CHANGING. MSFS has some weird behavior when saving .FLT files which is the reason you've heard the SAVEs in MSFS are 'bugged'. 
+// It's not a BUG, it's a FEATURE. ;) and its meant to Resume a flight at the LOCAL time you left it, which also changes the .FLT file FirstFlightState value. 
+// FSAutoSave is meant to be used for persistent flights, where you go from GATE to GATE. Thats why it will always resume flights with PREFLIGHT_GATE and show the confirmation screen before a flight and remove the tug in front of the aircraft. 
+// The way you achieve this is by saving the .FLT file 'early' (when the sim engine is running but flight has not started yet). This resets FirstFlightState. 
+// The way MSFS does this trick is by saving the CustomFlight.FLT for every flight you start from the menu, effectively resetting the FirstFlightState to PREFLIGHT_GATE
+void firstSave() {
+    isFinalSave = FALSE;
+    isFirstSave = TRUE;
+    printf("[NOTICE] First Save... (check confirmation below)\n\n");
+    if (currentFlight == "CUSTOMFLIGHT.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
+        if (userLoadedPLN) {
+            printf("User loaded LAST.PLN file to start a flight with ATC active.\n\n");
+            userLoadedPLN = FALSE; // Reset the flag
+        }
+        else {
+            printf("User selected BOTH a Departure and ARRIVAL airport to start a flight but no ATC Flight Plan.\n\n");
+            SimConnect_FlightPlanLoad(hSimConnect, ""); // Deactivate the flight plan before saving
+            SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
+            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+        }
+    }
+    // User is resuming a flight after originally starting a flight with a LAST.PLN file
+    else if (currentFlight == "LAST.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
+        printf("User opened LAST.FLT after starting a flight with a LAST.PLN file\n\n");
+        SimConnect_FlightPlanLoad(hSimConnect, ""); // Activate the most current flight plan
+        SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN"); // Activate the most current flight plan
+        SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
+        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+    }
+    // User has been repeteadly opening LAST.FLT file after starting a flight with a LAST.PLN file (3 or more times)
+    else if (currentFlight == "LAST.FLT" && currentFlightPlan == "LAST.PLN") {
+        userLoadedPLN = FALSE; // Reset the flag again as there is a special case here
+        printf("User has opened LAST.FLT for 3 or mores time after originally starting a flight with a LAST.PLN file\n\n");
+        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+    }
+    // For Flights Initiated or Resumed by selecting a DEPARTURE AIRPORT ONLY
+    else if ((currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") && currentFlightPlan == "") {
+        if (currentFlight == "CUSTOMFLIGHT.FLT") {
+            printf("User selected a DEPARTURE airport and started a flight. ");
+            printf("No flight plan is loaded or needed\n\n");
+            SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
+            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+        }
+        else if (currentFlight == "LAST.FLT") {
+            printf("User RESUMED a flight with no Flight Plan (where only DEPARTURE and/or ARRIVAL was selected). ");
+            printf("No flight plan is loaded or needed\n\n");
+        }
+        else {
+            printf("An Unknown situation happened - ERROR CODE: 3\n"); // This is a random ERROR CODE just for tracking edge cases
+        }
+    }
+    else { // Can't think of any other edge case
+        printf("An Unknown situation happened - ERROR CODE: 4\n"); // This is a random ERROR CODE just for tracking edge cases
+    }
+}
+
+void finalSave() {
+    printf("[NOTICE] Saving... (check confirmation below)\n\n");
+    isFinalSave = TRUE;
+    isFirstSave = FALSE;
+
+    // We save BOTH to avoid discrepancies when starting a flight from the menu as CUSTOMFLIGHT.FLT is used 
+    // when selecting DEPARTURE/DESTINATION directly to start a flight. DO NOT CHANGE THIS
+    SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
+    SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
 }
 
 void initApp() {
@@ -308,7 +378,7 @@ void initApp() {
     hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_FLIGHTLOADED_STATE, "FlightLoaded");    // szString contains the flight loaded path  
     hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_SIM_STATE, "Sim");                      // What is the current state of the sim?
 
-    // System events (the ones we need to know when they happen) ORDER MATTERS!
+    // System events (the ones we need to know when they happen) 
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_RECUR_FRAME, "frame");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_START, "SimStart");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_STOP, "SimStop");
@@ -473,7 +543,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         break;
     }
 
-                                                 // I can receive here either szString, dwInteger, or fFloat it will depend on the data type I requested
+    // I can receive here either szString, dwInteger, or fFloat it will depend on the data type I requested
     case SIMCONNECT_RECV_ID_SYSTEM_STATE: {
         SIMCONNECT_RECV_SYSTEM_STATE* pState = (SIMCONNECT_RECV_SYSTEM_STATE*)pData;
         switch (pState->dwRequestID) {
@@ -596,75 +666,24 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         else { // Other events
             switch (evt->uEventID)
             {
-            case EVENT_SITUATION_SAVE: { // RIGHT ALT + s
+            case EVENT_SITUATION_SAVE: { // CTRL+ALT+S or ESC triggered - Also for the automatic initial save (to set local ZULU time)
 
-                // Only the following are allowed to be saved
+                // Only the following Flights are allowed to be saved
                 if (currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") {
-                    // For a save trigged by setZuluAndSave we will pass a value of 99
-                    if (evt->dwData == 99) { // INITIAL SAVE
-                        isFinalSave = FALSE;
-                        isFirstSave = TRUE;
-                        printf("[NOTICE] Initial Save... (check confirmation below)\n\n");
-                        if (currentFlight == "CUSTOMFLIGHT.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
-                            if (userLoadedPLN) {
-                                printf("User loaded LAST.PLN file to start a flight with ATC active.\n\n");
-                                userLoadedPLN = FALSE; // Reset the flag
-                            }
-                            else {
-                                printf("User selected BOTH a Departure and ARRIVAL airport to start a flight but no ATC Flight Plan.\n\n");
-                                SimConnect_FlightPlanLoad(hSimConnect, ""); // Deactivate the flight plan before saving
-                                SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-                                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-                            }
-                        }
-                        // User is resuming a flight after originally starting a flight with a LAST.PLN file
-                        else if (currentFlight == "LAST.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
-                            printf("User opened LAST.FLT after starting a flight with a LAST.PLN file\n\n");
-                            SimConnect_FlightPlanLoad(hSimConnect, ""); // Activate the most current flight plan
-                            SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN"); // Activate the most current flight plan
-                            SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-                            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-                        }
-                        // User has been repeteadly opening LAST.FLT file after starting a flight with a LAST.PLN file (3 or more times)
-                        else if (currentFlight == "LAST.FLT" && currentFlightPlan == "LAST.PLN") {
-                            userLoadedPLN = FALSE; // Reset the flag again as there is a special case here
-                            printf("User has opened LAST.FLT for 3 or mores time after originally starting a flight with a LAST.PLN file\n\n");
-                            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-                            break;
-                        }
-                        // For Flights Initiated or Resumed by selecting a DEPARTURE AIRPORT ONLY
-                        else if ((currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") && currentFlightPlan == "") {
-                            if (currentFlight == "CUSTOMFLIGHT.FLT") {
-                                printf("User selected a DEPARTURE airport and started a flight. ");
-                                SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-                                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-                            }
-                            else if (currentFlight == "LAST.FLT") {
-                                printf("User RESUMED a flight with no Flight Plan (where only DEPARTURE and/or ARRIVAL was selected). ");
-                            }
-                            else {
-                                printf("An Unknown situation happened - ERROR CODE: 3\n");
-                                break;
-                            }
-                            printf("No flight plan is loaded or needed\n\n");
-                        }
-                        else { // Can't think of any other edge case
-                            printf("An Unknown situation happened - ERROR CODE: 4\n");
-                            break;
-                        }
-                    }
-                    else if (evt->dwData == 0) { // FINAL SAVE (or ESC triggered)
-                        printf("[NOTICE] Saving... (check confirmation below)\n\n");
-                        isFinalSave = TRUE;
-                        isFirstSave = FALSE;
 
-                        // We save BOTH to avoid discrepancies when starting a flight from the menu as CUSTOMFLIGHT.FLT is used 
-                        // when selecting DEPARTURE/DESTINATION directly to start a flight. DO NOT CHANGE THIS
-                        SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-                        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+                    if (evt->dwData == 99) { // INITIAL SAVE - Saves triggered by setZuluAndSave (we pass 99 as custom value)
+                        if (!DEBUG)
+                            firstSave();
+                        else
+                            printf("[DEBUG] WE ARE IN DEBUG MODE... No initial save triggered\n\n");
                     }
-                    else { // other values for dwData not implemented yet
-                        // Notice that dwData is not 99 or 0, so we will not save the situation, this is to identify how the event was triggered
+                    else if (evt->dwData == 0) { // NORMAL SAVE (CTRL+ALT+S or ESC triggered)
+                        if(!DEBUG)
+                            finalSave();
+                        else
+                            printf("[DEBUG] WE ARE IN DEBUG MODE... No final/normal save triggered\n\n");
+                    }
+                    else { // Values for dwData other than 0 or 99 (not implemented yet)
                         printf("[ALERT] FLIGHT SITUATION WAS NOT SAVED. RECEIVED %d AS dwData\n\n", evt->dwData);
                     }
                 }
@@ -771,8 +790,6 @@ void sc()
 
 int __cdecl _tmain(int argc, _TCHAR* argv[])
 {
-    bool DEBUG = FALSE;
-    bool minimizeOnStart = FALSE;
 
     // Parse command line arguments
     for (int i = 1; i < argc; ++i) {
