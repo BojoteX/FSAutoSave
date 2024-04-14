@@ -6,11 +6,12 @@
 // ---------------------------------------------------------
 
 #include <Windows.h>
+#include <map>
 #include <tchar.h>
-#include <chrono>
-#include <string>
+#include <filesystem>
 #include <iostream>
-#include <algorithm>
+#include <fstream>
+#include <string>
 #include "SimConnect.h"
 
 // Define the SimConnect object and other global variables
@@ -18,7 +19,11 @@ HRESULT hr;
 HANDLE  hSimConnect     = NULL;
 bool    DEBUG           = FALSE;
 bool    minimizeOnStart = FALSE;
+bool	resetSaves      = FALSE;    
 int     quit            = 0;
+
+// Define the namespace for the filesystem
+namespace fs = std::filesystem; // Namespace alias for std::filesystem
 
 // Define a unique filename for the saved flight situation
 const char* szFileName      = "Missions\\Custom\\CustomFlight\\CustomFlight";
@@ -33,6 +38,10 @@ std::string currentFlightPlan;
 std::string currentFlightPlanPath;
 std::string currentFlight;
 std::string currentFlightPath;
+
+// MSFS directory & Community path
+std::string MSFSPath;
+std::string CommunityPath;
 
 // Flags to control the application
 bool isOnMenuScreen     = FALSE;            // Set TRUE when FLT FILE == MAINMENU.FLT
@@ -148,6 +157,170 @@ ZuluTime getZuluTime() {
     return zuluTime;
 }
 
+// Define a map to hold different sets of files
+std::map<std::string, std::vector<std::string>> fileSets = {
+
+    {"MSFS Situation Files", {
+        "Missions\\Custom\\CustomFlight\\CustomFlight.FLT",
+        "Missions\\Custom\\CustomFlight\\CustomFlight.PLN",
+        "Missions\\Custom\\CustomFlight\\CustomFlight.WX",
+        "Missions\\Custom\\CustomFlight\\CustomFlight.SPB",
+    }},
+
+    {"FSAutoSave generated Situation Files", {
+        "LAST.FLT",
+        "LAST.PLN",
+        "LAST.WX",
+        "LAST.SPB",
+    }},
+
+    {"PMDG 737-800", {
+        "Packages\\pmdg-aircraft-738\\work\\PanelState\\CustomFlight.sav",
+        "Packages\\pmdg-aircraft-738\\work\\PanelState\\CustomFlight.fmc",     
+        "Packages\\pmdg-aircraft-738\\work\\PanelState\\LAST.sav",
+        "Packages\\pmdg-aircraft-738\\work\\PanelState\\LAST.fmc",
+    }},
+
+    // Additional sets can be added here
+};
+
+// Function to delete all files from all sets or simulate the deletion process
+void deleteAllSavedSituations() {
+    printf("\n[RESET] Resetting all saved situations from %s\n", MSFSPath.c_str());
+    for (const auto& pair : fileSets) {
+        const std::string& setName = pair.first;
+        const auto& files = pair.second;
+
+        printf("\n[RESET] Processing set: %s\n", setName.c_str());
+        for (const auto& file : files) {
+            fs::path fullPath = fs::path(MSFSPath) / file;
+            if (DEBUG) {
+                // In DEBUG mode, simulate the file deletion
+                if (fs::exists(fullPath)) {
+                    printf("[DEBUG] Would delete %s\n", fullPath.string().c_str());
+                }
+                else {
+                    printf("[DEBUG] File does not exist: %s\n", fullPath.string().c_str());
+                }
+            }
+            else {
+                // In normal mode, actually delete the file
+                if (fs::remove(fullPath)) {
+                    printf("[RESET] Successfully removed %s\n", fullPath.string().c_str());
+                }
+                else {
+                    if (fs::exists(fullPath)) {
+                        printf("[ERROR] Failed to remove %s\n", fullPath.string().c_str());
+                    }
+                    else {
+                        printf("[INFO] %s does not exist.\n", fullPath.string().c_str());
+                    }
+                }
+            }
+        }
+    }
+}
+
+std::string get_env_variable(const char* env_var) {
+    char* buffer = nullptr;
+    size_t size = 0;
+    errno_t err = _dupenv_s(&buffer, &size, env_var);
+
+    std::string result;
+    if (buffer != nullptr) {
+        result = buffer;  // Convert C-style string to std::string
+        free(buffer);     // Free the dynamically allocated memory
+    }
+    else {
+        printf("%s environment variable not found.\n", env_var);
+    }
+    return result;
+}
+
+bool isMSFSDirectoryWritable(const std::string& directoryPath) {
+    if (directoryPath.empty()) {
+        return false;
+    }
+
+    // Create a test file path
+    std::string testFilePath = directoryPath + "/test_file.txt";
+    // Try to write to the test file
+    std::ofstream testFile(testFilePath);
+    if (testFile) {
+        testFile << "Testing write permissions.";
+        testFile.close(); // Close the file to flush changes
+
+        // Attempt to remove the test file as cleanup
+        if (fs::remove(testFilePath)) {
+            return true; // Successfully wrote and deleted the test file
+        }
+        else {
+            return false; // Write succeeded but delete failed
+        }
+    }
+    else {
+        return false; // Failed to write
+    }
+}
+
+std::string getMSFSdir() {
+    std::string localAppData = get_env_variable("LOCALAPPDATA");
+    std::string appData = get_env_variable("APPDATA");
+
+    if (localAppData.empty() || appData.empty()) {
+        printf("Required environment variable not found.\n");
+        return "";
+    }
+
+    // Paths for MS Store and DVD version
+    std::string ms_store_dir = localAppData + "\\Packages\\Microsoft.FlightSimulator_8wekyb3d8bbwe\\LocalCache";
+    // Path for Steam version
+    std::string steam_dir = appData + "\\Microsoft Flight Simulator";
+
+    // Check if the directories exist
+    if (fs::exists(ms_store_dir)) {
+        return ms_store_dir;
+    }
+    else if (fs::exists(steam_dir)) {
+        return steam_dir;
+    }
+    else {
+        printf("MSFS directory not found.\n");
+        return "";
+    }
+}
+
+std::string getCommunityPath(const std::string& user_cfg_path) {
+    if (!fs::exists(user_cfg_path)) {
+        printf("File does not exist: %s\n", user_cfg_path.c_str());
+        return "";
+    }
+
+    std::ifstream file(user_cfg_path);
+    if (!file) {
+        printf("Failed to open file: %s\n", user_cfg_path.c_str());
+        return "";
+    }
+
+    std::string line;
+    std::string key = "InstalledPackagesPath";
+    size_t pos;
+    while (getline(file, line)) {
+        pos = line.find(key);
+        if (pos != std::string::npos) {
+            size_t start_quote = line.find('"', pos + key.length());
+            if (start_quote != std::string::npos) {
+                size_t end_quote = line.find('"', start_quote + 1);
+                if (end_quote != std::string::npos) {
+                    std::string path = line.substr(start_quote + 1, end_quote - start_quote - 1);
+                    return path;
+                }
+            }
+        }
+    }
+    return "";
+}
+
 std::string NormalizePath(const std::string& fullPath) {
     std::string result;
     // Identify if the path ends with "aircraft.cfg" in a case-insensitive manner.
@@ -245,22 +418,38 @@ void saveAndSetZULU() {
         if (!wasReset) {
             // We set time after aircraft is loaded as we know we are almost ready
             ZuluTime zuluTime = getZuluTime();
-            SimConnect_TransmitClientEvent(hSimConnect, SIMCONNECT_OBJECT_ID_USER, EVENT_ZULU_MINUTES_SET, zuluTime.minute, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
-            SimConnect_TransmitClientEvent(hSimConnect, SIMCONNECT_OBJECT_ID_USER, EVENT_ZULU_HOURS_SET, zuluTime.hour, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
-            SimConnect_TransmitClientEvent(hSimConnect, SIMCONNECT_OBJECT_ID_USER, EVENT_ZULU_DAY_SET, zuluTime.dayOfYear, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
-            SimConnect_TransmitClientEvent(hSimConnect, SIMCONNECT_OBJECT_ID_USER, EVENT_ZULU_YEAR_SET, zuluTime.year, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
-            printf(" *** Setting Local ZULU Time *** \n\n");
+
+            if (!DEBUG) {
+                SimConnect_TransmitClientEvent(hSimConnect, SIMCONNECT_OBJECT_ID_USER, EVENT_ZULU_MINUTES_SET, zuluTime.minute, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+                SimConnect_TransmitClientEvent(hSimConnect, SIMCONNECT_OBJECT_ID_USER, EVENT_ZULU_HOURS_SET, zuluTime.hour, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+                SimConnect_TransmitClientEvent(hSimConnect, SIMCONNECT_OBJECT_ID_USER, EVENT_ZULU_DAY_SET, zuluTime.dayOfYear, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+                SimConnect_TransmitClientEvent(hSimConnect, SIMCONNECT_OBJECT_ID_USER, EVENT_ZULU_YEAR_SET, zuluTime.year, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+                printf(" *** Setting Local ZULU Time *** \n\n");
+            }
+            else {
+                printf("[DEBUG] Will skip setting ZULU time as we are in DEBUG mode\n\n");
+            }
 
             // Save the situation
             SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_SITUATION_SAVE, 99, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
         }
         else {
-            printf("[ALERT] Skipping SAVE and local ZULU set as this was a situation reset/reload.\n\n");
+            if (!DEBUG) {
+                printf("[ALERT] Skipping SAVE and local ZULU set as this was a situation reset/reload.\n\n");
+            }
+            else {
+				printf("[DEBUG] Will skip saving as we are in DEBUG mode (we were not saving any way, as this was a reset/reload)\n\n");
+			}
         }
     }
     else {
         // Handle cases where saves are not allowed
-        saveNotAllowed();
+        if (!DEBUG) {
+            saveNotAllowed();
+        }
+        else {
+			printf("[DEBUG] Will skip saving as we are in DEBUG mode (we were not saving here any way as the logic/flow prevented that here) \n");
+		}
     }
 }
 
@@ -286,10 +475,7 @@ void simStatus(bool running) {
             currentStatus();
 
             // Try to do a save and set ZULU time
-            if(!DEBUG)
-                saveAndSetZULU();
-            else
-                printf("[DEBUG] WE ARE IN DEBUG MODE... Will NOT set local ZULU or trigger a SAVE\n\n");
+            saveAndSetZULU();
         }
     }
     else {
@@ -310,40 +496,64 @@ void firstSave() {
     printf("[NOTICE] First Save... (check confirmation below)\n\n");
     if (currentFlight == "CUSTOMFLIGHT.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
         if (userLoadedPLN) {
-            printf("User loaded LAST.PLN file to start a flight with ATC active.\n\n");
+            printf("User loaded LAST.PLN file to start a flight with MSFS ATC active. (tug will show on your left)\n\n");
             userLoadedPLN = FALSE; // Reset the flag
         }
         else {
-            printf("User selected BOTH a Departure and ARRIVAL airport to start a flight but no ATC Flight Plan.\n\n");
-            SimConnect_FlightPlanLoad(hSimConnect, ""); // Deactivate the flight plan before saving
-            SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+            printf("User selected BOTH a Departure and ARRIVAL airport to start a flight but no ATC Flight Plan. (no tug will show)\n\n");
+
+            if (!DEBUG) {
+                SimConnect_FlightPlanLoad(hSimConnect, ""); // Deactivate the flight plan before saving
+                SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
+                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+            }
+            else {
+				printf("[DEBUG] Will skip saving as we are in DEBUG mode\n\n");
+            }
         }
     }
     // User is resuming a flight after originally starting a flight with a LAST.PLN file
     else if (currentFlight == "LAST.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
-        printf("User opened LAST.FLT after starting a flight with a LAST.PLN file\n\n");
-        SimConnect_FlightPlanLoad(hSimConnect, ""); // Activate the most current flight plan
-        SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN"); // Activate the most current flight plan
-        SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+        printf("User opened LAST.FLT after starting a flight with a LAST.PLN file (tug will show on your left)\n\n");
+
+        if (!DEBUG) {
+            SimConnect_FlightPlanLoad(hSimConnect, ""); // Activate the most current flight plan
+            SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN"); // Activate the most current flight plan
+            SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
+            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+        }
+        else {
+			printf("[DEBUG] Will skip saving as we are in DEBUG mode\n\n");
+		}
     }
     // User has been repeteadly opening LAST.FLT file after starting a flight with a LAST.PLN file (3 or more times)
     else if (currentFlight == "LAST.FLT" && currentFlightPlan == "LAST.PLN") {
         userLoadedPLN = FALSE; // Reset the flag again as there is a special case here
-        printf("User has opened LAST.FLT for 3 or mores time after originally starting a flight with a LAST.PLN file\n\n");
-        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+        printf("User has opened LAST.FLT 3 or mores time after originally starting a flight with a LAST.PLN file (tug will show on your left)\n\n");
+
+        if (!DEBUG) {
+            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+        }
+        else {
+            printf("[DEBUG] Will skip saving as we are in DEBUG mode\n\n");
+        }
     }
     // For Flights Initiated or Resumed by selecting a DEPARTURE AIRPORT ONLY
     else if ((currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") && currentFlightPlan == "") {
         if (currentFlight == "CUSTOMFLIGHT.FLT") {
-            printf("User selected a DEPARTURE airport and started a flight. ");
+            printf("User selected a DEPARTURE airport and started a flight (no tug will show). ");
             printf("No flight plan is loaded or needed\n\n");
-            SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+
+            if (!DEBUG) {
+                SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
+                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+            }
+            else {
+				printf("[DEBUG] Will skip saving as we are in DEBUG mode\n\n");
+			}
         }
         else if (currentFlight == "LAST.FLT") {
-            printf("User RESUMED a flight with no Flight Plan (where only DEPARTURE and/or ARRIVAL was selected). ");
+            printf("User RESUMED a flight with no Flight Plan and only DEPARTURE and/or ARRIVAL was selected (no tug will show). ");
             printf("No flight plan is loaded or needed\n\n");
         }
         else {
@@ -362,8 +572,14 @@ void finalSave() {
 
     // We save BOTH to avoid discrepancies when starting a flight from the menu as CUSTOMFLIGHT.FLT is used 
     // when selecting DEPARTURE/DESTINATION directly to start a flight. DO NOT CHANGE THIS
-    SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-    SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+
+    if(!DEBUG) {
+        SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
+        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+	}
+    else {
+        printf("[DEBUG] Will skip saving as we are in DEBUG mode\n\n");
+    }
 }
 
 void initApp() {
@@ -672,16 +888,10 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 if (currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") {
 
                     if (evt->dwData == 99) { // INITIAL SAVE - Saves triggered by setZuluAndSave (we pass 99 as custom value)
-                        if (!DEBUG)
-                            firstSave();
-                        else
-                            printf("[DEBUG] WE ARE IN DEBUG MODE... No initial save triggered\n\n");
+                        firstSave();
                     }
                     else if (evt->dwData == 0) { // NORMAL SAVE (CTRL+ALT+S or ESC triggered)
-                        if(!DEBUG)
-                            finalSave();
-                        else
-                            printf("[DEBUG] WE ARE IN DEBUG MODE... No final/normal save triggered\n\n");
+                        finalSave();
                     }
                     else { // Values for dwData other than 0 or 99 (not implemented yet)
                         printf("[ALERT] FLIGHT SITUATION WAS NOT SAVED. RECEIVED %d AS dwData\n\n", evt->dwData);
@@ -758,6 +968,14 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     }
 }
 
+void waitForEnter() {
+    printf("Press ENTER to exit...");
+    char buffer[10];  // Larger buffer to accommodate Enter key and extra characters if needed
+    do {
+        fgets(buffer, sizeof(buffer), stdin);
+    } while (buffer[0] != '\n'); // Check directly for newline character
+}
+
 void sc()
 {
 
@@ -795,9 +1013,51 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
     for (int i = 1; i < argc; ++i) {
         if (_tcscmp(argv[i], _T("-DEBUG")) == 0) {
             DEBUG = TRUE;
+            printf("[INFO]  *** DEBUG MODE IS ON *** \n");
         }
-        else if (_tcscmp(argv[i], _T("-minimize")) == 0) {
+        if (_tcscmp(argv[i], _T("-SILENT")) == 0) {
             minimizeOnStart = TRUE;
+        }
+        if (_tcscmp(argv[i], _T("-RESET")) == 0) {
+            resetSaves = TRUE;
+        }
+    }
+
+    MSFSPath = getMSFSdir();
+    if (!MSFSPath.empty()) {     
+        if (!isMSFSDirectoryWritable(MSFSPath)) {
+            MSFSPath = "";
+            printf("[INFO] MSFS is in a read-only directory. Some functionality (e.g save reset) will be disabled.\n");
+        }
+    }
+
+    if (!MSFSPath.empty()) {  
+		printf("[INFO] MSFS is Installed locally.\n");
+        CommunityPath = getCommunityPath(MSFSPath + "\\UserCfg.opt");  // Assign directly to the global variable 
+
+        if (!CommunityPath.empty()) {
+			printf("[INFO] Your MSFS Community Path is located at %s\n", CommunityPath.c_str());
+		}
+        else {
+			printf("[ERROR] Your UserCfg.opt is corrupted. A Community Path could not be found.\n");
+		}
+
+        // Check if the user wants to reset the saved situations. We call the function to RESET the saves and then exit the program.
+        if (resetSaves) {
+            deleteAllSavedSituations();
+            waitForEnter();  // Ensure user presses Enter
+            return 0;
+        }
+	}
+    else {
+        // Check if the user wants to reset the saved situations. We call the function to RESET the saves and then exit the program.
+        if (resetSaves) {
+            printf("[RESET] To RESET saved situations run this program where MSFS is installed\n");
+            waitForEnter();  // Ensure user presses Enter
+            return 0;
+        }
+        else {
+            printf("[INFO] MSFS NOT Installed locally, FSAutoSave will run over the network using SimConnect.cfg (if present)\n");
         }
     }
 
@@ -810,7 +1070,7 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
     }
 
     if (!enableANSI()) {
-        std::cout << "ANSI color is not supported.\n";
+        printf("ANSI color is not supported.\n");
     }
     else {
 
@@ -821,7 +1081,7 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
         SetConsoleCP(CP_UTF8);
 
         // Set the default console text color to bright white
-        std::cout << "\033[97m";
+        printf("\033[97m");
 
     }
 
