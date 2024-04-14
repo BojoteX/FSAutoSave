@@ -1,11 +1,8 @@
 // Copyright (c) Jesus "Bojote" Altuve, All rights reserved.
-// FSAutoSave - A simple program to save your last flight so you can resume exactly where you left.
+// FSAutoSave - A simple program to automatically save your last flight so you can resume exactly where you left.
 // 
-// Right ALT + s  =  to save the current flight 
-// Right ALT + f  =  Reloads the flight using LAST.PLN as the Flight Plan, 
-// Right ALT + r  =  Resets the flight plan, removes ALL waypoints and ground services
-//           ESC  =  to save the current flight.
-// 
+// CTRL+ALT+S  =  to save the current flight 
+//        ESC  =  to save the current flight.
 // ---------------------------------------------------------
 
 #include <Windows.h>
