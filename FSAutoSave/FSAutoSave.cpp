@@ -162,20 +162,21 @@ ZuluTime getZuluTime() {
 // Define a map to hold different sets of files
 std::map<std::string, std::vector<std::string>> fileSets = {
 
+    // Core set of files to be deleted
     {"MSFS Situation Files", {
         "Missions\\Custom\\CustomFlight\\CustomFlight.FLT",
         "Missions\\Custom\\CustomFlight\\CustomFlight.PLN",
         "Missions\\Custom\\CustomFlight\\CustomFlight.WX",
         "Missions\\Custom\\CustomFlight\\CustomFlight.SPB",
     }},
-
+    // FSAutoSave generated files
     {"FSAutoSave generated Situation Files", {
         "LAST.FLT",
         "LAST.PLN",
         "LAST.WX",
         "LAST.SPB",
     }},
-
+    // Aircraft Addon files
     {"PMDG 737-800", {
         "Packages\\pmdg-aircraft-738\\work\\PanelState\\CustomFlight.sav",
         "Packages\\pmdg-aircraft-738\\work\\PanelState\\CustomFlight.fmc",     
@@ -404,6 +405,21 @@ void sendText(HANDLE hSimConnect, const std::string& text) {
 
     // Send the message, now safely within bounds and types
     SimConnect_Text(hSimConnect, SIMCONNECT_TEXT_TYPE_PRINT_WHITE, 5.0, 0, messageLength, (void*)result);
+}
+
+// Function to trim whitespace from the start and end of a string
+std::string trim(const std::string& str) {
+    auto start = str.begin();
+    while (start != str.end() && std::isspace(*start, std::locale::classic())) {
+        ++start;
+    }
+
+    auto end = str.rbegin();
+    while (end.base() != start && std::isspace(*end, std::locale::classic())) {
+        ++end;
+    }
+
+    return std::string(start, end.base());
 }
 
 std::string modifyConfigFile(const std::string& filePath, const std::map<std::string, std::string>& changes) {
