@@ -6,6 +6,7 @@
 // ---------------------------------------------------------
 
 #include <windows.h>
+#include <thread>
 #include <map>
 #include <tchar.h>
 #include <filesystem>
@@ -17,18 +18,23 @@
 
 // Define the SimConnect object and other global variables
 HRESULT hr;
-HANDLE  hSimConnect     = NULL;
-bool    DEBUG           = FALSE;
-bool    minimizeOnStart = FALSE;
-bool	resetSaves      = FALSE;    
-bool	isBUGfixed	    = FALSE;
-int     startCounter    = 0;
-int     quit            = 0;
-int     fpDisableCount  = 0;
+HANDLE  hSimConnect       = NULL;
+bool    isTUGremoved	  = FALSE;
+bool    DEBUG             = FALSE;
+bool    minimizeOnStart   = FALSE;
+bool	resetSaves        = FALSE;    
+bool	isBUGfixed	      = FALSE;
+int     startCounter      = 0;
+int     quit              = 0;
+int     fpDisableCount    = 0;
+
+// Monitor file writes
+HANDLE g_hEvent; // Global event handle
 
 // Define a unique marker for deletion operations (Used for fixing MSFS bug when Flight State is set to LANDING_GATE / WAITING in .FLT file)
 const std::string DELETE_MARKER         = "!DELETE!";           // Unique marker for deletion operations
 const std::string DELETE_SECTION_MARKER = "!DELETE_SECTION!";   // Unique marker for section deletions
+const std::string enableAirportLife     = "1"; // String to enable or disable the Taxi Tug 
 
 // Define the namespace for the filesystem
 namespace fs = std::filesystem; // Namespace alias for std::filesystem
@@ -71,6 +77,24 @@ DWORD isSimRunning      = 0;                // TRUE when the sim is running
 #define PAUSE_STATE_FLAG_ACTIVE_PAUSE 4     // Active Pause
 #define PAUSE_STATE_FLAG_SIM_PAUSE 8        // Sim Pause (traffic, multi, etc., will still run)
 
+// Important for all my data requests types (see below)
+struct AircraftPosition {
+    double latitude;
+    double longitude;
+    double altitude;
+};
+
+struct SimDayOfYear {
+    double dayOfYear;
+};
+
+struct ZuluTime {
+    DWORD minute;
+    DWORD hour;
+    DWORD dayOfYear;
+    DWORD year;
+};
+
 // Input definitions. Used to map a key to a client event
 enum INPUT_ID {
     INPUT0,
@@ -85,15 +109,17 @@ enum GROUP_ID {
 // Data definitions. Used with SimConnect_AddToDataDefinition and SimConnect_RequestDataOnSimObjectType to request data from the simulator
 enum DATA_DEFINE_ID {
     DEFINITION_ZULU_TIME,
+    DEFINITION_POSITION_DATA,
 };
 
-// Same as above, but used with SimConnect_RequestSystemState to request system state data from the simulator
+// Same as above, but used with SimConnect_RequestSystemState to request system state data from the simulator or RequestObjectType to request object data
 enum DATA_REQUEST_ID {
     REQUEST_SIM_STATE,
     REQUEST_AIRCRAFT_STATE,
     REQUEST_FLIGHTLOADED_STATE,
     REQUEST_FLIGHTPLAN_STATE,
     REQUEST_ZULU_TIME,
+    REQUEST_POSITION,
 };
 
 // Define the data structure
@@ -118,17 +144,6 @@ enum EVENT_ID {
     EVENT_SITUATION_RESET,
     EVENT_SITUATION_RELOAD,
     EVENT_RECUR_FRAME,
-};
-
-struct ZuluTimeData {
-    double zuluTime;
-};
-
-struct ZuluTime {
-    DWORD minute;
-    DWORD hour;
-    DWORD dayOfYear;
-    DWORD year;
 };
 
 bool enableANSI() {
@@ -331,6 +346,9 @@ std::string getCommunityPath(const std::string& user_cfg_path) {
 }
 
 std::string NormalizePath(const std::string& fullPath) {
+    
+    // printf("fullpath: %s\n", fullPath.c_str());
+
     std::string result;
     // Identify if the path ends with "aircraft.cfg" in a case-insensitive manner.
     std::string lowerPath = fullPath;
@@ -466,6 +484,14 @@ std::string modifyConfigFile(const std::string& filePath, const std::map<std::st
     return filePath;  // Return the file path if all operations are successful
 }
 
+std::string wideToNarrow(const std::wstring& wstr) {
+    if (wstr.empty()) return std::string();
+    int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+    std::string strTo(sizeNeeded, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], sizeNeeded, NULL, NULL);
+    return strTo;
+}
+
 void fixMSFSbug(const std::string& filePath) {
     // Check if the last flight state is set to LANDING_GATE or WAITING in the LAST.FLT file and FIX it
 
@@ -510,26 +536,11 @@ void initialFLTchange() {
             fixMSFSbug(lastMOD);
             fixMSFSbug(customFlightmod);
 
-            std::map<std::string, std::map<std::string, std::string>> firstsaveCUSTOMFLIGHT = {
-                {"Assistance", {{"!DELETE_SECTION!", "!DELETE!"}}},  // Used to DELETE entire section.
-                {"LivingWorld", {
-                    {"AirportLife", "0"},
-                }},
-            };
-
             std::map<std::string, std::map<std::string, std::string>> firstsaveLAST = {
                 {"LivingWorld", {
-                    {"AirportLife", "0"},
+                    {"AirportLife", enableAirportLife},
                 }},
             };
-            
-            customFlightmod = modifyConfigFile(customFlightmod, firstsaveCUSTOMFLIGHT); // This one is CustomFlight.FLT
-            customFlightmod = NormalizePath(customFlightmod);
-            if (!customFlightmod.empty())
-                printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", customFlightmod.c_str());
-            else
-                printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", customFlightmod.c_str());
-
 
             lastMOD = modifyConfigFile(lastMOD, firstsaveLAST);
             lastMOD = NormalizePath(lastMOD);
@@ -785,10 +796,86 @@ void finalSave() {
     }
 }
 
+int monitorCustomFlightChanges() {
+
+    // This is so we can keep track of when the CustomFlight.FLT file is updated by the simulator.
+
+    // MSFSPath is the full path to the MSFS directory and is stored as a std::string. We only want to monitor the directory where CustomFlight.FLT is for changes, so we do:
+    std::string pathToMonitor = MSFSPath + "\\" + "Missions\\Custom\\CustomFlight";
+
+    // Convert the MSFSPath to std::wstring once
+    std::wstring widepathToMonitor(pathToMonitor.begin(), pathToMonitor.end());
+
+    LPCWSTR directoryPath = widepathToMonitor.c_str();
+
+    HANDLE hDir = CreateFile(directoryPath, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+
+    if (hDir == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to open directory for monitoring: " << GetLastError() << std::endl;
+        return 1;
+    }
+
+    char buffer[1024];
+    DWORD bytesReturned;
+    while (TRUE) {
+        BOOL success = ReadDirectoryChangesW(hDir, buffer, sizeof(buffer), FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE, &bytesReturned, NULL, NULL);
+        if (!success) {
+            std::cerr << "Failed to read directory changes: " << GetLastError() << std::endl;
+            break; // Exit the loop on failure
+        }
+
+        FILE_NOTIFY_INFORMATION* pNotify = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(buffer);
+        do {
+            std::wstring changedFileName(pNotify->FileName, pNotify->FileNameLength / sizeof(WCHAR));
+            std::string narrowFile = wideToNarrow(changedFileName);
+
+            if (narrowFile == "CustomFlight.FLT" && !isTUGremoved) {
+                // printf("\n[INFO] *** File \x1b[33m[ %s ]\x1b[0m has been updated ***\n", narrowFile.c_str());
+
+                // Remove the tug in front of the aircraft
+                std::map<std::string, std::map<std::string, std::string>> fixState = {
+                    {"LivingWorld", {{"AirportLife", enableAirportLife}}} // Change AirportLife to 0 to remove the tug in front of the aircraft
+                };
+
+                std::string customFlightfile = pathToMonitor + "\\" + narrowFile;
+                std::string ffSTATEprev = readConfigFile(customFlightfile, "ObjectFile", "File");
+                std::string ffSTATE;
+                if (ffSTATEprev == "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" || ffSTATEprev == "CustomFlight") {
+                    ffSTATE = modifyConfigFile(customFlightfile, fixState);
+                    if (!ffSTATE.empty()) {
+                        printf("[INFO] File %s was updated to remove Tug in front of the aircraft\n", narrowFile.c_str());
+                        isTUGremoved = TRUE;
+                    }
+                    else {
+                        printf("[ERROR] Could NOT update %s to remove Tug\n", narrowFile.c_str());
+                    }
+                }
+            }
+            pNotify = pNotify->NextEntryOffset ? reinterpret_cast<FILE_NOTIFY_INFORMATION*>((BYTE*)pNotify + pNotify->NextEntryOffset) : NULL;
+        } while (pNotify != NULL);
+    }
+
+    CloseHandle(hDir); // Ensure the directory handle is closed properly
+    return 0;
+}
+
 void initApp() {
 
-    // Read early any data I need
-    // hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ZULU_TIME, "ZULU DAY OF YEAR", NULL);
+    // Run monitoring for CustomFlight.FLT file writes in a separate thread.
+    std::thread fileMonitorThread(monitorCustomFlightChanges);
+    fileMonitorThread.detach();  // Detach the thread to run independently
+
+    // Request data on specific simulation objects by their unique object ID (e.g. the user aircraft, which has the object ID SIMCONNECT_OBJECT_ID_USER)
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "Plane Latitude", "degrees");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "Plane Longitude", "degrees");
+    hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND, SIMCONNECT_DATA_REQUEST_FLAG_CHANGED);
+
+    // Read early any data I need (this is just a sample for ZULU time) 
+    // hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ZULU_TIME, "ZULU DAY OF YEAR", "number");
+    // hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ZULU_TIME, DEFINITION_ZULU_TIME, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
+
+    // Sample of how to request data on a specific object type (e.g. all user aircraft)
     // hr = SimConnect_RequestDataOnSimObjectType(hSimConnect, REQUEST_ZULU_TIME, DEFINITION_ZULU_TIME, 0, SIMCONNECT_SIMOBJECT_TYPE_USER);
 
     // ORDER MATTERS!! Aircraft must be loaded first. Then the flight plan. Then the flight loaded. Then the sim state
@@ -850,16 +937,44 @@ void initApp() {
 
     // Set the system event state (toggle ON or OFF)
     hr = SimConnect_SetSystemEventState(hSimConnect, EVENT_RECUR_FRAME, SIMCONNECT_STATE_OFF); // Enable it when we need to analyze every frame
-
-    if (FAILED(hr)) {
-        printf(" [ERROR] ****************** See code: %lx\n", hr);
-    }
 }
 
 void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 {
+    if(DEBUG)
+        printf("Received callback with data size: %lu bytes\n", cbData); // General data size
+
     switch (pData->dwID)
     {
+
+    case SIMCONNECT_RECV_ID_SIMOBJECT_DATA:
+    {
+        SIMCONNECT_RECV_SIMOBJECT_DATA* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA*)pData;
+
+        if(DEBUG)
+            printf("SIMOBJECT_DATA received with request ID: %lu\n", pObjData->dwRequestID); // Identify request ID
+
+        switch (pObjData->dwRequestID)
+        {
+        case REQUEST_POSITION:
+        {
+            AircraftPosition* pS = (AircraftPosition*)&pObjData->dwData;
+            printf("Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+            break;
+        }
+        case REQUEST_ZULU_TIME:
+        {
+            SimDayOfYear* pDOY = (SimDayOfYear*)&pObjData->dwData;
+            printf("In-Sim ZULU Day of Year: %.0lf\n", pDOY->dayOfYear);
+            break;
+        }
+        default:
+            if(DEBUG)
+                printf("Unhandled request ID: %lu\n", pObjData->dwRequestID); // Log unhandled request IDs
+            break;
+        }
+        break;
+    }
 
     case SIMCONNECT_RECV_ID_EVENT_FRAME:
     {
@@ -883,6 +998,9 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         switch (evt->uEventID)
         {
         case EVENT_FLIGHT_LOAD:
+
+            isTUGremoved = FALSE;
+
             currentFlight = NormalizePath(evt->szFileName);
             currentFlightPath = evt->szFileName;
 
@@ -917,6 +1035,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
             break;
         case EVENT_FLIGHTPLAN_ACTIVATED:
+
             currentFlightPlan = NormalizePath(evt->szFileName);
             currentFlightPlanPath = evt->szFileName;
             isFlightPlanActive = TRUE;
@@ -939,6 +1058,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             currentStatus();
             break;
         case EVENT_AIRCRAFT_LOADED: {
+
             currentAircraft = NormalizePath(evt->szFileName);
 
             if (currentAircraft != "") {
@@ -961,13 +1081,13 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     case SIMCONNECT_RECV_ID_SIMOBJECT_DATA_BYTYPE: {
         SIMCONNECT_RECV_SIMOBJECT_DATA_BYTYPE* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA_BYTYPE*)pData;
         switch (pObjData->dwRequestID) {
-        case REQUEST_ZULU_TIME: {
-            ZuluTimeData* pZuluTime = (ZuluTimeData*)&pObjData->dwData;
-            int zuluTimeInt = static_cast<int>(pZuluTime->zuluTime); // Truncate to integer
-            printf("\n[READING DATA] Day of the year: %d\n", zuluTimeInt);
-            break;
-        }
-        default:
+            case REQUEST_ZULU_TIME:
+            {
+                SimDayOfYear* pDOY = (SimDayOfYear*)&pObjData->dwData;
+                printf("In-Sim ZULU Day of Year: %.0lf\n", pDOY->dayOfYear);
+                break;
+            }
+            default:
             break;
         }
         break;
@@ -978,6 +1098,9 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         SIMCONNECT_RECV_SYSTEM_STATE* pState = (SIMCONNECT_RECV_SYSTEM_STATE*)pData;
         switch (pState->dwRequestID) {
         case REQUEST_FLIGHTLOADED_STATE:
+
+            isTUGremoved = FALSE;
+
             currentFlight = NormalizePath(pState->szString);
             currentFlightPath = pState->szString;
 
@@ -1150,10 +1273,8 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 break;
             case EVENT_SIM_START: {
                 simStatus(1);
-
                 // See logic inside the function for when to trigger the initial save
                 initialFLTchange();
-
                 break;
             }
             case EVENT_SIM_STOP: {
@@ -1181,7 +1302,16 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         break;
     }
 
+    case SIMCONNECT_RECV_ID_OPEN:
+    {
+        SIMCONNECT_RECV_OPEN* openData = (SIMCONNECT_RECV_OPEN*)pData;
+        printf("[SIMCONNECT] Connected to Flight Simulator! (%s Version %d.%d - Build %d)\n", openData->szApplicationName, openData->dwApplicationVersionMajor, openData->dwApplicationVersionMinor, openData->dwApplicationBuildMajor);
+        break;
+    }
+
     default:
+        if(DEBUG)
+            printf("Unhandled data ID: %lu\n", pData->dwID); // Log unhandled data IDs
         break;
     }
 }
@@ -1201,7 +1331,6 @@ void sc()
 
     while (!quit) {
         if (SUCCEEDED(SimConnect_Open(&hSimConnect, "FSAutoSave", NULL, 0, 0, 0))) {
-            printf("[SIMCONNECT] Connected to Flight Simulator!\n");
             break; // Exit the loop if connected
         }
         else {
