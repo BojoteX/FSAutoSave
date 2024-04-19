@@ -19,7 +19,6 @@
 // Define the SimConnect object and other global variables
 HRESULT hr;
 HANDLE  hSimConnect       = NULL;
-bool    isTUGremoved	  = FALSE;
 bool    DEBUG             = FALSE;
 bool    minimizeOnStart   = FALSE;
 bool	resetSaves        = FALSE;    
@@ -28,13 +27,16 @@ int     startCounter      = 0;
 int     quit              = 0;
 int     fpDisableCount    = 0;
 
+// Global flag to indicate whether the application is currently modifying an .FLT file.
+std::atomic<bool> isModifyingFile(false);
+
 // Monitor file writes
 HANDLE g_hEvent; // Global event handle
 
 // Define a unique marker for deletion operations (Used for fixing MSFS bug when Flight State is set to LANDING_GATE / WAITING in .FLT file)
 const std::string DELETE_MARKER         = "!DELETE!";           // Unique marker for deletion operations
 const std::string DELETE_SECTION_MARKER = "!DELETE_SECTION!";   // Unique marker for section deletions
-const std::string enableAirportLife     = "1"; // String to enable or disable the Taxi Tug 
+const std::string enableAirportLife     = "0";                  // String to enable or disable the Taxi Tug 
 
 // Define the namespace for the filesystem
 namespace fs = std::filesystem; // Namespace alias for std::filesystem
@@ -56,8 +58,12 @@ std::string currentFlightPath;
 // MSFS directory & Community path
 std::string MSFSPath;
 std::string CommunityPath;
+std::string pathToMonitor;
 
-// Flags to control the application
+// Define the path to the GetFP.exe program to download your MSFS Flight Plan automatically from Simbrief
+wchar_t GetFPpath[1024];
+
+// Flags to track application states
 bool isOnMenuScreen     = FALSE;            // Set TRUE when FLT FILE == MAINMENU.FLT
 bool isFlightPlanActive = FALSE;            // FALSE when Flight plan DEACTIVATED, TRUE when ACTIVATED
 bool wasReset           = FALSE;            // TRUE when the sim was reset using SITUATION_RESET
@@ -88,11 +94,23 @@ struct SimDayOfYear {
     double dayOfYear;
 };
 
+struct CameraState {
+    double state;
+};
+
 struct ZuluTime {
     DWORD minute;
     DWORD hour;
     DWORD dayOfYear;
     DWORD year;
+};
+
+struct SIMCONNECT_RECV_FACILITY_AIRPORT_LIST {
+    char ident[6];
+    char region[3];
+    double  Latitude;
+    double  Longitude;
+    double  Altitude;
 };
 
 // Input definitions. Used to map a key to a client event
@@ -110,6 +128,7 @@ enum GROUP_ID {
 enum DATA_DEFINE_ID {
     DEFINITION_ZULU_TIME,
     DEFINITION_POSITION_DATA,
+    DEFINITION_CAMERA_STATE,
 };
 
 // Same as above, but used with SimConnect_RequestSystemState to request system state data from the simulator or RequestObjectType to request object data
@@ -120,6 +139,9 @@ enum DATA_REQUEST_ID {
     REQUEST_FLIGHTPLAN_STATE,
     REQUEST_ZULU_TIME,
     REQUEST_POSITION,
+    REQUEST_DIALOG_STATE,
+    REQUEST_CAMERA_STATE,
+    REQUEST_AIRPORT_LIST,
 };
 
 // Define the data structure
@@ -144,6 +166,9 @@ enum EVENT_ID {
     EVENT_SITUATION_RESET,
     EVENT_SITUATION_RELOAD,
     EVENT_RECUR_FRAME,
+    EVENT_SIM_VIEW,
+    EVENT_SIM_CRASHED,
+    EVENT_SIM_CRASHRESET,
 };
 
 bool enableANSI() {
@@ -162,6 +187,64 @@ bool enableANSI() {
         return false;
     }
     return true;
+}
+
+void SafeCopyPath(const wchar_t* source) {
+    errno_t err = wcscpy_s(GetFPpath, _countof(GetFPpath), source);
+    if (err != 0) {
+        wprintf(L"[ERROR] Could not get GetFP.exe path. Error code: %d\n", err);
+    }
+    else {
+        if (fs::exists(GetFPpath)) {
+            wprintf(L"[INFO] Simbrief integration enabled using %s\n", GetFPpath);
+        }
+        else {
+            wprintf(L"[INFO] You tried to enable Simbrief integration with GetFP.exe, but path %s is wrong (file does not exist)\n", GetFPpath);
+            std::fill(GetFPpath, GetFPpath + _countof(GetFPpath), L'\0');  // Properly clear the array
+        }
+    }
+}
+
+void getFP() {
+    std::wstring programPath = GetFPpath;
+
+    if (wcslen(GetFPpath) > 0) {
+        wprintf(L"Downloading Flight Plan from Simbrief using %s\n", programPath.c_str());
+    }
+    else {
+        wprintf(L"For GetFP.exe integration use -SIMBRIEF:\"C:\\PATH_TO_PROGRAM\\GetFP.exe\"\n");
+        return;
+    }
+
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    // Start the child process.
+    if (!CreateProcess(
+        NULL,           // No module name (use command line)
+        (LPWSTR)programPath.c_str(), // Command line
+        NULL,           // Process handle not inheritable
+        NULL,           // Thread handle not inheritable
+        FALSE,          // Set handle inheritance to FALSE
+        0,              // No creation flags
+        NULL,           // Use parent's environment block
+        NULL,           // Use parent's starting directory 
+        &si,            // Pointer to STARTUPINFO structure
+        &pi)           // Pointer to PROCESS_INFORMATION structure
+        ) {
+        std::cerr << "Process failed (" << GetLastError() << ").\n";
+        return;
+    }
+
+    // Wait until child process exits.
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    // Close process and thread handles.
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
 }
 
 ZuluTime getZuluTime() {
@@ -493,7 +576,7 @@ std::string wideToNarrow(const std::wstring& wstr) {
 }
 
 void fixMSFSbug(const std::string& filePath) {
-    // Check if the last flight state is set to LANDING_GATE or WAITING in the LAST.FLT file and FIX it
+    // Check if the last flight state is set to LANDING_GATE or WAITING and FIX it. Also we change PREFLIGHT_TAXI to PREFLIGHT_GATE for consistency 
 
     std::string MODfile = filePath;
     std::string ffSTATE;
@@ -514,98 +597,113 @@ void fixMSFSbug(const std::string& filePath) {
 				printf("\n[ERROR] ********* [ %s READ OK, BUT FAILED TO FIX BUG ] *********\n", MODfile.c_str());
 			}
         }
-        else {
-            MODfile = NormalizePath(MODfile);
-            printf("\n[OK] Flight State is %s. No FIX needed, so no modifications were done to %s\n", ffSTATE.c_str(), MODfile.c_str());
-        }
         return;
     }
     MODfile = NormalizePath(MODfile);
     printf("\n[ERROR] ********* [ FAILED TO READ %s ] *********\n", MODfile.c_str());
 }
 
-void initialFLTchange() {
-    // We use the counter to track how many times the sim engine is running while on the menu screen
-    if (currentFlight == "MAINMENU.FLT") {
-        if (startCounter == 0) { // Only modify the file once, the first time the sim engine is running while on the menu screen
-
-            std::string lastMOD = MSFSPath + "\\LAST.FLT";
-            std::string customFlightmod = MSFSPath + "\\" + szFileName + ".FLT";
-
-            // Fix the MSFS bug where the FirstFlightState is set to LANDING_GATE or WAITING for BOTH .FLT files
-            fixMSFSbug(lastMOD);
-            fixMSFSbug(customFlightmod);
-
-            std::map<std::string, std::map<std::string, std::string>> firstsaveLAST = {
-                {"LivingWorld", {
-                    {"AirportLife", enableAirportLife},
-                }},
-            };
-
-            lastMOD = modifyConfigFile(lastMOD, firstsaveLAST);
-            lastMOD = NormalizePath(lastMOD);
-            if(!lastMOD.empty())
-                printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", lastMOD.c_str());
-            else
-                printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", lastMOD.c_str());
-
-            // We update BOTH .FLT to ensure the sim starts with the correct flt file loaded
-        }
-        startCounter++;
-    }
-}
-
 void finalFLTchange() {
     // We don't need a counter here as finalFLTchange is only called after the final save
 
+    std::string customFlightmod = MSFSPath + "\\" + szFileName + ".FLT";
     std::string lastMOD = MSFSPath + "\\LAST.FLT";
-    std::map<std::string, std::map<std::string, std::string>> finalsave;
-
+    
     // Define or compute your variable
+    std::string missionLocation = "$$: Miami"; // Use LAT/LON format to use a specific location
     std::string dynamicTitle = "Resume your flight";
     std::string dynamicBrief = "Welcome back! ready to resume your flight?";
 
-    // Fix the MSFS bug where the FirstFlightState is set to LANDING_GATE or WAITING
-    fixMSFSbug(lastMOD);
+    std::string ffSTATE1 = readConfigFile(lastMOD, "FreeFlight", "FirstFlightState");
+    std::string ffSTATE2 = readConfigFile(customFlightmod, "FreeFlight", "FirstFlightState");
 
-    if (isBUGfixed) {
-        // Do any operations that need to be done after the bug is fixed
-
-        // Create a map of changes if the bug was fixed (we also delete the entire Departure and Arrival sections as your flight has been completed)
-        finalsave = {
+    // This is just for consistency as we want to start from the gate if you are resuming a flight from the actual gate
+    if (ffSTATE1 == "PREFLIGHT_PUSHBACK" || ffSTATE1 == "") {
+        ffSTATE1 = "PREFLIGHT_GATE";
+    }
+    if (ffSTATE2 == "PREFLIGHT_PUSHBACK" || ffSTATE2 == "") {
+        ffSTATE2 = "PREFLIGHT_GATE";
+    }
+        
+    // Create a map of changes if the bug was fixed (we also delete the entire Departure and Arrival sections as your flight has been completed)
+    std::map<std::string, std::map<std::string, std::string>> finalsave = {
         {"Departure", {{"!DELETE_SECTION!", "!DELETE!"}}},  // Used to DELETE entire section. 
-        {"Arrival", {{"!DELETE_SECTION!", "!DELETE!"}}},  // Used to DELETE entire section. 
+        {"Arrival", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
+        {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"Main", {
             {"Title", dynamicTitle },
-            {"MissionLocation", "$$: Miami"},
+            {"MissionLocation", missionLocation},
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
         }},
-        };
+    };
 
+    // Create a map of changes if the bug was not fixed (or not present) for the LAST.FLT file
+    std::map<std::string, std::map<std::string, std::string>> finalsave1 = {
+        {"LivingWorld", {{"AirportLife", enableAirportLife}}},
+        {"FreeFlight", {{"FirstFlightState", ffSTATE1}}},
+        {"Main", {
+            {"Title", dynamicTitle },
+        }},
+        {"Briefing", {
+            {"BriefingText", dynamicBrief },
+        }},
+    };
+
+    // Create a map of changes if the bug was not fixed (or not present) for the CUSTOMFLIGHT.FLT file
+    std::map<std::string, std::map<std::string, std::string>> finalsave2 = {
+        {"LivingWorld", {{"AirportLife", enableAirportLife}}},
+        {"FreeFlight", {{"FirstFlightState", ffSTATE2}}},
+        {"Main", {
+            {"Title", dynamicTitle },
+        }},
+        {"Briefing", {
+            {"BriefingText", dynamicBrief },
+        }},
+    };
+
+    // Fix the MSFS bug where the FirstFlightState is set to LANDING_GATE or WAITING in LAST.FLT
+    fixMSFSbug(lastMOD);
+    if (isBUGfixed && isFinalSave) {
         isBUGfixed = FALSE; // Reset the flag
+        lastMOD = modifyConfigFile(lastMOD, finalsave);
     }
     else {
-		// Create a map of changes if the bug was not fixed (or not present)
-        finalsave = {
-        {"Main", {
-			{"Title", dynamicTitle },
-            {"MissionLocation", "$$: Miami"},
-		}},
-        {"Briefing", {
-			{"BriefingText", dynamicBrief },
-		}},
-		};
+		lastMOD = modifyConfigFile(lastMOD, finalsave1);
 	}
 
-    lastMOD = modifyConfigFile(lastMOD, finalsave);
-    lastMOD = NormalizePath(lastMOD);
+    // Fix the MSFS bug where the FirstFlightState is set to LANDING_GATE or WAITING in CUSTOMFLIGHT.FLT
+    fixMSFSbug(customFlightmod);
+    if (isBUGfixed && isFinalSave) {
+        isBUGfixed = FALSE; // Reset the flag
+        customFlightmod = modifyConfigFile(customFlightmod, finalsave);
+    }
+    else {
+        customFlightmod = modifyConfigFile(customFlightmod, finalsave2);
+    }
 
+    lastMOD = NormalizePath(lastMOD);
     if (!lastMOD.empty())
         printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", lastMOD.c_str());
     else
         printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", lastMOD.c_str());
+
+    customFlightmod = NormalizePath(customFlightmod);
+    if (!customFlightmod.empty())
+        printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", customFlightmod.c_str());
+    else
+        printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", customFlightmod.c_str());
+}
+
+void initialFLTchange() { // We just wrap the finalFLTchange() function here as we only need to call it once
+    // We use the counter to track how many times the sim engine is running while on the menu screen
+    if (currentFlight == "MAINMENU.FLT" || currentFlight == "") {
+        if (startCounter == 0) { // Only modify the file once, the first time the sim engine is running while on the menu screen
+            finalFLTchange();
+        }
+        startCounter++;
+    }
 }
 
 void saveNotAllowed() {
@@ -619,7 +717,7 @@ void saveNotAllowed() {
         startCounter = 0;
 
         // MODIFY the .FLT file to set the FirstFlightState to PREFLIGHT_GATE but only do it for the final save and when flight is LAST.FLT
-        if (currentFlight == "LAST.FLT") {
+        if (currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") {
             // Make all neccessary changes to the .FLT files
             finalFLTchange();
         }
@@ -678,6 +776,9 @@ void simStatus(bool running) {
             // Green for "ON MENU SCREEN"
             printf("\n[SIM STATE] ********* \033[32m [ RUNNING ] \033[0m ********* -> (IS ON MENU SCREEN) \n");
 
+            // Try to obtain Airports around me
+            hr = SimConnect_RequestFacilitiesList(hSimConnect, SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT, REQUEST_AIRPORT_LIST);
+
             // Set the flag to TRUE when the flight plan is activated and if one is loaded by the user
             if (currentFlight == "MAINMENU.FLT" && currentFlightPlan == "LAST.PLN")
                 userLoadedPLN = TRUE;
@@ -699,76 +800,39 @@ void simStatus(bool running) {
     }
 }
 
-// This function is KEY to handle all edge cases when resuming a flight. CAREFUL WHEN CHANGING. MSFS has some weird behavior when saving .FLT files which is the reason you've heard the SAVEs in MSFS are 'bugged'. 
-// It's not a BUG, it's a FEATURE. ;) and its meant to Resume a flight at the LOCAL time you left it, which also changes the .FLT file FirstFlightState value. 
-// FSAutoSave is meant to be used for persistent flights, where you go from GATE to GATE. Thats why it will always resume flights with PREFLIGHT_GATE and show the confirmation screen before a flight and remove the tug in front of the aircraft. 
-// The way you achieve this is by saving the .FLT file 'early' (when the sim engine is running but flight has not started yet). This resets FirstFlightState. 
-// The way MSFS does this trick is by saving the CustomFlight.FLT for every flight you start from the menu, effectively resetting the FirstFlightState to PREFLIGHT_GATE
+// Its not an actual save, but a way to key track of what was loaded (e.g what type of flight)
 void firstSave() {
     isFinalSave = FALSE;
     isFirstSave = TRUE;
-    printf("\n[NOTICE] First Save... (check confirmation below)\n");
+    printf("\n[NOTICE] Starting flight... \n");
     if (currentFlight == "CUSTOMFLIGHT.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
         if (userLoadedPLN) {
-            printf("\n[INFO] User loaded LAST.PLN file to start a flight with MSFS ATC active. (tug will show on your left)\n");
+            printf("\n[INFO] User loaded LAST.PLN file to start a flight with MSFS ATC active.\n");
             userLoadedPLN = FALSE; // Reset the flag
         }
         else {
-            printf("\n[INFO] User selected BOTH a Departure and ARRIVAL airport to start a flight but no ATC Flight Plan. (no tug will show)\n");
-
-            if (!DEBUG) {
+            printf("\n[INFO] User selected BOTH a Departure and ARRIVAL airport to start a flight but no ATC Flight Plan.\n");
                 SimConnect_FlightPlanLoad(hSimConnect, ""); // Deactivate the flight plan before saving
-                SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-            }
-            else {
-				printf("\n[DEBUG] Will skip saving as we are in DEBUG mode\n");
-            }
         }
     }
     // User is resuming a flight after originally starting a flight with a LAST.PLN file
     else if (currentFlight == "LAST.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
-        printf("\n[INFO] User opened LAST.FLT after starting a flight with a LAST.PLN file (tug will show on your left)\n");
-
-        if (!DEBUG) {
-            SimConnect_FlightPlanLoad(hSimConnect, ""); // Activate the most current flight plan
-            SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN"); // Activate the most current flight plan
-            SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-        }
-        else {
-			printf("\n[DEBUG] Will skip saving as we are in DEBUG mode\n");
-		}
+        printf("\n[INFO] User opened LAST.FLT after starting a flight with a LAST.PLN file. MSFS ATC will be active\n");
+        SimConnect_FlightPlanLoad(hSimConnect, ""); // Activate the most current flight plan        
+        SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN"); // Activate the most current flight plan
     }
     // User has been repeteadly opening LAST.FLT file after starting a flight with a LAST.PLN file (3 or more times)
     else if (currentFlight == "LAST.FLT" && currentFlightPlan == "LAST.PLN") {
         userLoadedPLN = FALSE; // Reset the flag again as there is a special case here
-        printf("\n[INFO] User has opened LAST.FLT 3 or mores time after originally starting a flight with a LAST.PLN file (tug will show on your left)\n");
-
-        if (!DEBUG) {
-            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-        }
-        else {
-            printf("\n[DEBUG] Will skip saving as we are in DEBUG mode\n");
-        }
+        printf("\n[INFO] User has opened LAST.FLT 3 or mores time after originally starting a flight with a LAST.PLN file.\nMSFS ATC will be active using LAST.PLN as your Flight Plan\n");
     }
     // For Flights Initiated or Resumed by selecting a DEPARTURE AIRPORT ONLY
     else if ((currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") && currentFlightPlan == "") {
         if (currentFlight == "CUSTOMFLIGHT.FLT") {
-            printf("\n[INFO] User selected a DEPARTURE airport and started a flight (no tug will show). ");
-            printf("No flight plan is loaded or needed\n");
-
-            if (!DEBUG) {
-                SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
-                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-            }
-            else {
-				printf("\n[DEBUG] Will skip saving as we are in DEBUG mode\n");
-			}
+            printf("\n[INFO] User selected a DEPARTURE airport and started a flight. No flight plan is loaded or needed\n");
         }
         else if (currentFlight == "LAST.FLT") {
-            printf("\n[INFO] User RESUMED a flight with no Flight Plan and only DEPARTURE and/or ARRIVAL was selected\n(no tug will show). ");
-            printf("No flight plan is loaded or needed\n");
+            printf("\n[INFO] User RESUMED a flight with no Flight Plan and only DEPARTURE or DEPARTURE + ARRIVAL selected.\nNo flight plan is loaded or needed\n");
         }
         else {
             printf("An Unknown situation happened - ERROR CODE: 3\n"); // This is a random ERROR CODE just for tracking edge cases
@@ -796,19 +860,59 @@ void finalSave() {
     }
 }
 
+void fixCustomFlight() {
+
+    // If user loads a CustomFlight.FLT we assume he/she wants to start a flight from the GATE
+    std::string narrowFile = "CustomFlight.FLT";
+    std::string customFlightfile = pathToMonitor + "\\" + narrowFile;
+
+    // Read the current setting from the file so we can set the one that corresponds to the actual state
+    std::string gateSTATE = readConfigFile(customFlightfile, "FreeFlight", "FirstFlightState");
+    if (gateSTATE.empty()) {
+		gateSTATE = "PREFLIGHT_GATE"; // Set the default value
+	}
+    else if (gateSTATE == "LANDING_GATE" || gateSTATE == "WAITING") {
+		gateSTATE = "PREFLIGHT_GATE"; // Set the default value
+	}
+    else if (gateSTATE == "PREFLIGHT_PUSHBACK") {
+        gateSTATE = "PREFLIGHT_GATE"; // Set the default value
+    }
+
+    std::map<std::string, std::map<std::string, std::string>> fixState = {{
+             {"LivingWorld", {{"AirportLife", enableAirportLife}}},
+			 {"FreeFlight", {{"FirstFlightState", gateSTATE}}},
+    }};
+
+    std::string ffSTATEprev = readConfigFile(customFlightfile, "LivingWorld", "AirportLife");
+    if (!ffSTATEprev.empty()) { // Here we handle the case where the key is found in the file
+        // Before we modify the file, we check if the key is already set to the desired value
+        if (ffSTATEprev != enableAirportLife) { // Here we handle the case where the key is found in the file but needs to be updated
+            std::string ffSTATE = modifyConfigFile(customFlightfile, fixState);
+            if (!ffSTATE.empty()) {
+                printf("[INFO] File %s was *UPDATED*. Setting now is AirportLife=%s\n", narrowFile.c_str(), enableAirportLife.c_str());
+            }
+            else {
+                printf("[ERROR] Could NOT update %s. Most likely file was in use when trying to modify it\n", narrowFile.c_str());
+            }
+        }
+    }
+    else { // Here we handle the case where the key is not found in the file
+        std::string ffSTATE = modifyConfigFile(customFlightfile, fixState);
+        if (!ffSTATE.empty()) {
+            printf("[INFO] File %s now has a *NEW* setting added. AirportLife=%s\n", narrowFile.c_str(), enableAirportLife.c_str());
+        }
+        else {
+            printf("[ERROR] Could NOT update %s. Most likely file was in use when trying to modify it\n", narrowFile.c_str());
+        }
+    }
+}
+
 int monitorCustomFlightChanges() {
-
-    // This is so we can keep track of when the CustomFlight.FLT file is updated by the simulator.
-
-    // MSFSPath is the full path to the MSFS directory and is stored as a std::string. We only want to monitor the directory where CustomFlight.FLT is for changes, so we do:
-    std::string pathToMonitor = MSFSPath + "\\" + "Missions\\Custom\\CustomFlight";
-
-    // Convert the MSFSPath to std::wstring once
     std::wstring widepathToMonitor(pathToMonitor.begin(), pathToMonitor.end());
-
     LPCWSTR directoryPath = widepathToMonitor.c_str();
 
-    HANDLE hDir = CreateFile(directoryPath, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+    HANDLE hDir = CreateFile(directoryPath, FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
 
     if (hDir == INVALID_HANDLE_VALUE) {
@@ -819,41 +923,26 @@ int monitorCustomFlightChanges() {
     char buffer[1024];
     DWORD bytesReturned;
     while (TRUE) {
-        BOOL success = ReadDirectoryChangesW(hDir, buffer, sizeof(buffer), FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE, &bytesReturned, NULL, NULL);
-        if (!success) {
+        if (ReadDirectoryChangesW(hDir, buffer, sizeof(buffer), FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE, &bytesReturned, NULL, NULL)) {
+            FILE_NOTIFY_INFORMATION* pNotify = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(buffer);
+            do {
+
+                std::wstring changedFileName(pNotify->FileName, pNotify->FileNameLength / sizeof(WCHAR));
+                std::string narrowFile = wideToNarrow(changedFileName);
+
+                // We can have different logic for different files here. This one is just for CustomFlight.FLT in the MSFSPathtoMonitor
+                if (narrowFile == "CustomFlight.FLT") {
+                    // Modify CustomFlight.FLT file to fix MSFS bug
+                    fixCustomFlight();
+                }
+
+                pNotify = pNotify->NextEntryOffset ? reinterpret_cast<FILE_NOTIFY_INFORMATION*>((BYTE*)pNotify + pNotify->NextEntryOffset) : NULL;
+            } while (pNotify != NULL);
+        }
+        else {
             std::cerr << "Failed to read directory changes: " << GetLastError() << std::endl;
             break; // Exit the loop on failure
         }
-
-        FILE_NOTIFY_INFORMATION* pNotify = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(buffer);
-        do {
-            std::wstring changedFileName(pNotify->FileName, pNotify->FileNameLength / sizeof(WCHAR));
-            std::string narrowFile = wideToNarrow(changedFileName);
-
-            if (narrowFile == "CustomFlight.FLT" && !isTUGremoved) {
-                // printf("\n[INFO] *** File \x1b[33m[ %s ]\x1b[0m has been updated ***\n", narrowFile.c_str());
-
-                // Remove the tug in front of the aircraft
-                std::map<std::string, std::map<std::string, std::string>> fixState = {
-                    {"LivingWorld", {{"AirportLife", enableAirportLife}}} // Change AirportLife to 0 to remove the tug in front of the aircraft
-                };
-
-                std::string customFlightfile = pathToMonitor + "\\" + narrowFile;
-                std::string ffSTATEprev = readConfigFile(customFlightfile, "ObjectFile", "File");
-                std::string ffSTATE;
-                if (ffSTATEprev == "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" || ffSTATEprev == "CustomFlight") {
-                    ffSTATE = modifyConfigFile(customFlightfile, fixState);
-                    if (!ffSTATE.empty()) {
-                        printf("[INFO] File %s was updated to remove Tug in front of the aircraft\n", narrowFile.c_str());
-                        isTUGremoved = TRUE;
-                    }
-                    else {
-                        printf("[ERROR] Could NOT update %s to remove Tug\n", narrowFile.c_str());
-                    }
-                }
-            }
-            pNotify = pNotify->NextEntryOffset ? reinterpret_cast<FILE_NOTIFY_INFORMATION*>((BYTE*)pNotify + pNotify->NextEntryOffset) : NULL;
-        } while (pNotify != NULL);
     }
 
     CloseHandle(hDir); // Ensure the directory handle is closed properly
@@ -866,35 +955,49 @@ void initApp() {
     std::thread fileMonitorThread(monitorCustomFlightChanges);
     fileMonitorThread.detach();  // Detach the thread to run independently
 
-    // Request data on specific simulation objects by their unique object ID (e.g. the user aircraft, which has the object ID SIMCONNECT_OBJECT_ID_USER)
+    // My Data Definitions (for data I might need from Simvars)
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "Plane Latitude", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "Plane Longitude", "degrees");
-    hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND, SIMCONNECT_DATA_REQUEST_FLAG_CHANGED);
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_CAMERA_STATE, "CAMERA STATE", "number");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ZULU_TIME, "ZULU DAY OF YEAR", "number");
+
+    // One request for the user aircraft position polls every second, the other request for the user aircraft position polls only once
+    // hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND, SIMCONNECT_DATA_REQUEST_FLAG_CHANGED);
+    hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
+
+    // Request data on specific Simvars (e.g. ZULU time or CAMERA STATE)
+    hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_CAMERA_STATE, DEFINITION_CAMERA_STATE, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND, SIMCONNECT_DATA_REQUEST_FLAG_CHANGED);
 
     // Read early any data I need (this is just a sample for ZULU time) 
-    // hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ZULU_TIME, "ZULU DAY OF YEAR", "number");
     // hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ZULU_TIME, DEFINITION_ZULU_TIME, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
+    
+    // hr = SimConnect_RequestDataOnSimObjectType(hSimConnect, REQUEST_TYPE_AIRPORTS, DEFINITION_TYPE_AIRPORTS, 50000, SIMCONNECT_SIMOBJECT_TYPE_AIRPORT);
+    // hr = SimConnect_RequestDataOnSimObjectType(hSimConnect, REQUEST_TYPE_AIRPORTS, DEFINITION_TYPE_AIRPORTS, 0, SIMCONNECT_SIMOBJECT_TYPE_AIRPORT);
 
-    // Sample of how to request data on a specific object type (e.g. all user aircraft)
+    
+
     // hr = SimConnect_RequestDataOnSimObjectType(hSimConnect, REQUEST_ZULU_TIME, DEFINITION_ZULU_TIME, 0, SIMCONNECT_SIMOBJECT_TYPE_USER);
 
-    // ORDER MATTERS!! Aircraft must be loaded first. Then the flight plan. Then the flight loaded. Then the sim state
     // Request States (for when the program starts so we know the current state)
     hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_AIRCRAFT_STATE, "AircraftLoaded");      // szString contains the aircraft loaded path
     hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_FLIGHTPLAN_STATE, "FlightPlan");        // szString contains the flight plan path 
     hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_FLIGHTLOADED_STATE, "FlightLoaded");    // szString contains the flight loaded path
     hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_SIM_STATE, "Sim");                      // What is the current state of the sim?
+    hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_DIALOG_STATE, "DialogMode");            // Are we in dialog mode?
 
     // System events (the ones we need to know when they happen) 
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_RECUR_FRAME, "frame");
-    hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_PAUSE_EX1, "Pause_EX1");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_START, "SimStart");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_STOP, "SimStop");
+    hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_PAUSE_EX1, "Pause_EX1");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_AIRCRAFT_LOADED, "AircraftLoaded");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_FLIGHTPLAN_DEACTIVATED, "FlightPlanDeactivated");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_FLIGHTPLAN_ACTIVATED, "FlightPlanActivated");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_FLIGHT_SAVED, "FlightSaved");
     hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_FLIGHT_LOAD, "FlightLoaded");
+    hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_VIEW, "View");
+    hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_CRASHED, "Crashed");
+    hr = SimConnect_SubscribeToSystemEvent(hSimConnect, EVENT_SIM_CRASHRESET, "CrashReset");
 
     // ZULU Client Events. No need to set notification group for them as we don't need info back
     hr = SimConnect_MapClientEventToSimEvent(hSimConnect, EVENT_ZULU_MINUTES_SET, "ZULU_MINUTES_SET");
@@ -937,6 +1040,7 @@ void initApp() {
 
     // Set the system event state (toggle ON or OFF)
     hr = SimConnect_SetSystemEventState(hSimConnect, EVENT_RECUR_FRAME, SIMCONNECT_STATE_OFF); // Enable it when we need to analyze every frame
+    // hr = SimConnect_SetSystemEventState(hSimConnect, EVENT_RECUR_FRAME, SIMCONNECT_STATE_ON); // Enable it when we need to analyze every frame
 }
 
 void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
@@ -947,7 +1051,33 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     switch (pData->dwID)
     {
 
-    case SIMCONNECT_RECV_ID_SIMOBJECT_DATA:
+
+        /*
+
+            case SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT: // Corrected to the right identifier
+    {
+        printf("Facilities list received 2\n");
+
+    case REQUEST_AIRPORT_LIST: {
+        printf("Facilities list received\n");
+        break;
+    }
+
+        // Assuming we get a facilities list back, not just a single airport
+        SIMCONNECT_RECV_FACILITIES_LIST* pFacilities = (SIMCONNECT_RECV_FACILITIES_LIST*)pData;
+
+        // This would usually be a loop to process multiple airports if pData contains an array
+        for (unsigned int i = 0; i < pFacilities->dwArraySize; ++i) {
+            SIMCONNECT_DATA_FACILITY_AIRPORT* pAirport = ((SIMCONNECT_DATA_FACILITY_AIRPORT*)&pFacilities->dwRequestID) + i;
+            printf("Airport: Lat: %f, Long: %f\n", pAirport->Latitude, pAirport->Longitude);
+        }
+        break;
+    }
+
+        */
+
+
+    case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: 
     {
         SIMCONNECT_RECV_SIMOBJECT_DATA* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA*)pData;
 
@@ -956,10 +1086,27 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
         switch (pObjData->dwRequestID)
         {
+        case REQUEST_CAMERA_STATE:
+        {
+            CameraState* pCS = (CameraState*)&pObjData->dwData;
+            if (pCS->state == 12) {
+                std::thread(getFP).detach(); // Spawn a new thread to get the flight plan so we don't block the main thread. It will be cleaned up automatically
+			}
+            break;
+        }
         case REQUEST_POSITION:
         {
             AircraftPosition* pS = (AircraftPosition*)&pObjData->dwData;
-            printf("Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+
+            int lat_int = static_cast<int>(pS->latitude);
+            int lon_int = static_cast<int>(pS->longitude);
+
+            if (lat_int == 0 && lon_int == 0) {
+				printf("Aircraft Position: Not available or in Main Menu\n");
+			}
+            else {
+                printf("Our current position is Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+            }
             break;
         }
         case REQUEST_ZULU_TIME:
@@ -982,7 +1129,12 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         switch (evt->uEventID)
         {
         case EVENT_RECUR_FRAME:
-            hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_SIM_STATE, "Sim"); // What is the current state of the sim?
+
+            // Not really needed as SimStart/SimStop are the same
+            // hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_SIM_STATE, "Sim"); // What is the current state of the sim?
+
+            // Bugged. Its clearly not working
+            // hr = SimConnect_RequestSystemState(hSimConnect, REQUEST_DIALOG_STATE, "DialogMode"); // What is the current state of the sim?
 
             // Below we can get real-time data from the sim changing every frame, use judiciously
 
@@ -999,8 +1151,6 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         {
         case EVENT_FLIGHT_LOAD:
 
-            isTUGremoved = FALSE;
-
             currentFlight = NormalizePath(evt->szFileName);
             currentFlightPath = evt->szFileName;
 
@@ -1008,7 +1158,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 printf("\n[SITUATION EVENT] New Flight Loaded: %s\n", currentFlight.c_str());
             else
                 printf("\n[SITUATION EVENT] No flight loaded\n");
-
+  
             currentStatus();
 
             // Identify if we are in the menu screen by checking if the flight we just loaded is MAINMENU.FLT
@@ -1048,8 +1198,8 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
                     printf("\n[INFO] Before this activation (%d) DEACTIVATIONS ocurred. Will reset counter.\n", fpDisableCount);
                     fpDisableCount = 0; // Reset the counter
-                }
 
+                }
             }
             else {
                 printf("\n[SITUATION EVENT] No flight plan activated\n");
@@ -1097,9 +1247,18 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     case SIMCONNECT_RECV_ID_SYSTEM_STATE: {
         SIMCONNECT_RECV_SYSTEM_STATE* pState = (SIMCONNECT_RECV_SYSTEM_STATE*)pData;
         switch (pState->dwRequestID) {
-        case REQUEST_FLIGHTLOADED_STATE:
 
-            isTUGremoved = FALSE;
+        case REQUEST_DIALOG_STATE: {
+            // Bugged or not working as expected
+            if (pState->dwInteger) {
+			    // printf("\n[CURRENT STATE] Dialog Mode is ON -> %f - %s\n", pState->fFloat, pState->szString);
+		    }
+            else {
+			    // printf("\n[CURRENT STATE] Dialog Mode is OFF -> %f - %s\n", pState->fFloat, pState->szString);
+		    }
+		    break;
+		}
+        case REQUEST_FLIGHTLOADED_STATE:
 
             currentFlight = NormalizePath(pState->szString);
             currentFlightPath = pState->szString;
@@ -1193,16 +1352,14 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 // Legacy, might not be used
                 break;
             case PAUSE_STATE_FLAG_ACTIVE_PAUSE:
-                // printf("\n[PAUSE EX1] Active Pause enabled\n");
-                // currentStatus();
+                printf("\n[PAUSE EX1] Active Pause enabled\n");
+                currentStatus();
                 break;
             case PAUSE_STATE_FLAG_SIM_PAUSE: {
-                // printf("\n[PAUSE EX1] Simulation paused for player, but traffic and multiplayer active.\n");
-                // currentStatus();
                 wasSoftPaused = TRUE; // Set it so than we simulation starts we know it came from a soft pause
                 if (!isFinalSave && !isOnMenuScreen && isFirstSave) {
                     isPauseBeforeStart = TRUE;
-                    printf("\n[STATUS] Simulator is paused before the start\n");
+                    printf("\n[STATUS] Simulator is in Briefing screen before start (Press READY TO FLY)\n");
                     currentStatus();
                 }
                 break;
@@ -1268,7 +1425,6 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 currentFlightPlanPath = ""; // Reset the flight plan Path
                 isFlightPlanActive = FALSE;
                 fpDisableCount++;
-
                 currentStatus();
                 break;
             case EVENT_SIM_START: {
@@ -1279,6 +1435,26 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             }
             case EVENT_SIM_STOP: {
                 simStatus(0);
+                break;
+            }
+            case EVENT_SIM_VIEW: {
+                if (evt->dwData == 0) {
+                    printf("\n[EVENT_SIM_VIEW] Entering Main Menu\n");
+                }
+                else if (evt->dwData == 2) {
+                    printf("\n[EVENT_SIM_VIEW] Exiting Main Menu\n");
+                }
+                else {
+                    printf("\n[EVENT_SIM_VIEW] Changed views\n");
+                }
+                break;
+            }
+            case EVENT_SIM_CRASHED: {
+				printf("\n[EVENT_SIM_CRASHED] Aircraft Crashed\n");
+				break;
+			}
+            case EVENT_SIM_CRASHRESET: {
+				printf("\n[EVENT_SIM_CRASHRESET] Aircraft Crashed and Reset\n");
                 break;
             }
             default:
@@ -1305,7 +1481,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     case SIMCONNECT_RECV_ID_OPEN:
     {
         SIMCONNECT_RECV_OPEN* openData = (SIMCONNECT_RECV_OPEN*)pData;
-        printf("[SIMCONNECT] Connected to Flight Simulator! (%s Version %d.%d - Build %d)\n", openData->szApplicationName, openData->dwApplicationVersionMajor, openData->dwApplicationVersionMinor, openData->dwApplicationBuildMajor);
+        printf("\n[SIMCONNECT] Connected to Flight Simulator! (%s Version %d.%d - Build %d)\n", openData->szApplicationName, openData->dwApplicationVersionMajor, openData->dwApplicationVersionMinor, openData->dwApplicationBuildMajor);
         break;
     }
 
@@ -1368,25 +1544,33 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
         if (_tcscmp(argv[i], _T("-RESET")) == 0) {
             resetSaves = TRUE;
         }
+        if (wcsncmp(argv[i], L"-SIMBRIEF:", 10) == 0) {
+            SafeCopyPath(argv[i] + 10);  // Skip the "-SIMBRIEF:" (10 chars) part and copy the rest (the path) to the global variable GetFPpath
+        }
     }
 
     MSFSPath = getMSFSdir();
     if (!MSFSPath.empty()) {     
         if (!isMSFSDirectoryWritable(MSFSPath)) {
             MSFSPath = "";
-            printf("[INFO] MSFS is in a read-only directory. Some functionality (e.g save reset) will be disabled.\n");
+            printf("[INFO] MSFS is in a read-only directory. Program will not work, exiting.\n");
+            waitForEnter();  // Ensure user presses Enter
+            return 0;
         }
     }
 
     if (!MSFSPath.empty()) {  
 		printf("[INFO] MSFS is Installed locally.\n");
         CommunityPath = getCommunityPath(MSFSPath + "\\UserCfg.opt");  // Assign directly to the global variable 
+        pathToMonitor = MSFSPath + "\\Missions\\Custom\\CustomFlight"; // Path to monitor CustomFlight.FLT changes done by MSFS
 
         if (!CommunityPath.empty()) {
 			printf("[INFO] Your MSFS Community Path is located at %s\n", CommunityPath.c_str());
 		}
         else {
-			printf("[ERROR] Your UserCfg.opt is corrupted. A Community Path could not be found.\n");
+			printf("[ERROR] Your UserCfg.opt is corrupted. A Community Path could not be found. Will now exit\n");
+            waitForEnter();  // Ensure user presses Enter
+            return 0;
 		}
 
         // Check if the user wants to reset the saved situations. We call the function to RESET the saves and then exit the program.
@@ -1404,7 +1588,9 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
             return 0;
         }
         else {
-            printf("[INFO] MSFS NOT Installed locally, FSAutoSave will run over the network using SimConnect.cfg (if present)\n");
+            printf("[INFO] MSFS NOT Installed locally, FSAutoSave will NOT run over the network. Will now exit\n");
+            waitForEnter();  // Ensure user presses Enter
+            return 0;
         }
     }
 
@@ -1437,7 +1623,9 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
 
     // Check if the mutex was created successfully.
     if (hMutex == NULL) {
-        printf("[ERROR] Could NOT create the mutex!\n");
+        printf("[ERROR] Could NOT create the mutex! Will now exit.\n");
+        waitForEnter();  // Ensure user presses Enter
+        return 0;
         return 1; // Exit program if we cannot create the mutex.
     }
 
