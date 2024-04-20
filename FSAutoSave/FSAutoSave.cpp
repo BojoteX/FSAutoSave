@@ -105,14 +105,6 @@ struct ZuluTime {
     DWORD year;
 };
 
-struct SIMCONNECT_RECV_FACILITY_AIRPORT_LIST {
-    char ident[6];
-    char region[3];
-    double  Latitude;
-    double  Longitude;
-    double  Altitude;
-};
-
 // Input definitions. Used to map a key to a client event
 enum INPUT_ID {
     INPUT0,
@@ -776,9 +768,6 @@ void simStatus(bool running) {
             // Green for "ON MENU SCREEN"
             printf("\n[SIM STATE] ********* \033[32m [ RUNNING ] \033[0m ********* -> (IS ON MENU SCREEN) \n");
 
-            // Try to obtain Airports around me
-            hr = SimConnect_RequestFacilitiesList(hSimConnect, SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT, REQUEST_AIRPORT_LIST);
-
             // Set the flag to TRUE when the flight plan is activated and if one is loaded by the user
             if (currentFlight == "MAINMENU.FLT" && currentFlightPlan == "LAST.PLN")
                 userLoadedPLN = TRUE;
@@ -968,6 +957,9 @@ void initApp() {
     // Request data on specific Simvars (e.g. ZULU time or CAMERA STATE)
     hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_CAMERA_STATE, DEFINITION_CAMERA_STATE, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND, SIMCONNECT_DATA_REQUEST_FLAG_CHANGED);
 
+    // Try to obtain Airports around me
+    hr = SimConnect_RequestFacilitiesList_EX1(hSimConnect, SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT, REQUEST_AIRPORT_LIST);
+
     // Read early any data I need (this is just a sample for ZULU time) 
     // hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ZULU_TIME, DEFINITION_ZULU_TIME, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
     
@@ -1050,33 +1042,18 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
     switch (pData->dwID)
     {
+    case SIMCONNECT_RECV_ID_AIRPORT_LIST: {
+        SIMCONNECT_RECV_AIRPORT_LIST* pAirList = (SIMCONNECT_RECV_AIRPORT_LIST*)pData;
+            SIMCONNECT_DATA_FACILITY_AIRPORT* airports = (SIMCONNECT_DATA_FACILITY_AIRPORT*)(pAirList + 1);
 
+            for (DWORD i = 0; i < pAirList->dwArraySize; ++i) {
+                printf("Airport #%lu: Ident = %s, Region = %s, Latitude = %f, Longitude = %f, Altitude = %f\n",
+                    i + 1, airports[i].Ident, airports[i].Region, airports[i].Latitude, airports[i].Longitude, airports[i].Altitude);
+                printf("Current airport pointer: %p\n", &airports[i]);
+            }
 
-        /*
-
-            case SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT: // Corrected to the right identifier
-    {
-        printf("Facilities list received 2\n");
-
-    case REQUEST_AIRPORT_LIST: {
-        printf("Facilities list received\n");
         break;
     }
-
-        // Assuming we get a facilities list back, not just a single airport
-        SIMCONNECT_RECV_FACILITIES_LIST* pFacilities = (SIMCONNECT_RECV_FACILITIES_LIST*)pData;
-
-        // This would usually be a loop to process multiple airports if pData contains an array
-        for (unsigned int i = 0; i < pFacilities->dwArraySize; ++i) {
-            SIMCONNECT_DATA_FACILITY_AIRPORT* pAirport = ((SIMCONNECT_DATA_FACILITY_AIRPORT*)&pFacilities->dwRequestID) + i;
-            printf("Airport: Lat: %f, Long: %f\n", pAirport->Latitude, pAirport->Longitude);
-        }
-        break;
-    }
-
-        */
-
-
     case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: 
     {
         SIMCONNECT_RECV_SIMOBJECT_DATA* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA*)pData;
@@ -1086,6 +1063,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
         switch (pObjData->dwRequestID)
         {
+        
         case REQUEST_CAMERA_STATE:
         {
             CameraState* pCS = (CameraState*)&pObjData->dwData;
@@ -1554,8 +1532,8 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
         if (!isMSFSDirectoryWritable(MSFSPath)) {
             MSFSPath = "";
             printf("[INFO] MSFS is in a read-only directory. Program will not work, exiting.\n");
-            waitForEnter();  // Ensure user presses Enter
-            return 0;
+            // waitForEnter();  // Ensure user presses Enter
+            // return 0;
         }
     }
 
@@ -1589,8 +1567,8 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
         }
         else {
             printf("[INFO] MSFS NOT Installed locally, FSAutoSave will NOT run over the network. Will now exit\n");
-            waitForEnter();  // Ensure user presses Enter
-            return 0;
+            // waitForEnter();  // Ensure user presses Enter
+            // return 0;
         }
     }
 
