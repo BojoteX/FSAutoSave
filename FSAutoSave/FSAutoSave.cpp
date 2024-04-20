@@ -5,6 +5,7 @@
 //        ESC  =  to save the current flight.
 // ---------------------------------------------------------
 
+#define NOMINMAX
 #include <windows.h>
 #include <thread>
 #include <map>
@@ -45,6 +46,12 @@ namespace fs = std::filesystem; // Namespace alias for std::filesystem
 const char* szFileName      = "Missions\\Custom\\CustomFlight\\CustomFlight";
 const char* szTitle         = "FSAutoSave generated file";
 const char* szDescription   = "This is a save of your last flight so you can resume exactly where you left.";
+
+// For my current position
+double myLatitude               = 0.0;      // Your current latitude
+double myLongitude              = 0.0;      // Your current longitude
+double closestDistance          = DBL_MAX;  // Initialize to the maximum value
+const char* closestAirportIdent = nullptr;  // Initialize to an empty string
 
 // Global variables to hold the current states
 std::string currentAircraft;
@@ -121,6 +128,7 @@ enum DATA_DEFINE_ID {
     DEFINITION_ZULU_TIME,
     DEFINITION_POSITION_DATA,
     DEFINITION_CAMERA_STATE,
+    DEFINITION_AIRPORT_INFO,
 };
 
 // Same as above, but used with SimConnect_RequestSystemState to request system state data from the simulator or RequestObjectType to request object data
@@ -131,9 +139,11 @@ enum DATA_REQUEST_ID {
     REQUEST_FLIGHTPLAN_STATE,
     REQUEST_ZULU_TIME,
     REQUEST_POSITION,
+    REQUEST_POSITION_ONCE,
     REQUEST_DIALOG_STATE,
     REQUEST_CAMERA_STATE,
-    REQUEST_AIRPORT_LIST,
+    REQUEST_CLOSEST_AIRPORT,
+    REQUEST_JETWAY_DATA,
 };
 
 // Define the data structure
@@ -952,13 +962,9 @@ void initApp() {
 
     // One request for the user aircraft position polls every second, the other request for the user aircraft position polls only once
     // hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND, SIMCONNECT_DATA_REQUEST_FLAG_CHANGED);
-    hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
 
     // Request data on specific Simvars (e.g. ZULU time or CAMERA STATE)
     hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_CAMERA_STATE, DEFINITION_CAMERA_STATE, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND, SIMCONNECT_DATA_REQUEST_FLAG_CHANGED);
-
-    // Try to obtain Airports around me
-    hr = SimConnect_RequestFacilitiesList_EX1(hSimConnect, SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT, REQUEST_AIRPORT_LIST);
 
     // Read early any data I need (this is just a sample for ZULU time) 
     // hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_ZULU_TIME, DEFINITION_ZULU_TIME, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
@@ -1042,18 +1048,106 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
     switch (pData->dwID)
     {
-    case SIMCONNECT_RECV_ID_AIRPORT_LIST: {
-        SIMCONNECT_RECV_AIRPORT_LIST* pAirList = (SIMCONNECT_RECV_AIRPORT_LIST*)pData;
-            SIMCONNECT_DATA_FACILITY_AIRPORT* airports = (SIMCONNECT_DATA_FACILITY_AIRPORT*)(pAirList + 1);
 
-            for (DWORD i = 0; i < pAirList->dwArraySize; ++i) {
-                printf("Airport #%lu: Ident = %s, Region = %s, Latitude = %f, Longitude = %f, Altitude = %f\n",
-                    i + 1, airports[i].Ident, airports[i].Region, airports[i].Latitude, airports[i].Longitude, airports[i].Altitude);
-                printf("Current airport pointer: %p\n", &airports[i]);
+    case SIMCONNECT_RECV_ID_JETWAY_DATA:
+    {
+        SIMCONNECT_RECV_JETWAY_DATA* pJetwayData = (SIMCONNECT_RECV_JETWAY_DATA*)pData;
+        unsigned int count = static_cast<unsigned int>(pJetwayData->dwArraySize);
+
+        // Variables to find the closest jetway
+        double closestJetwayDistance = std::numeric_limits<double>::max();
+
+        SIMCONNECT_JETWAY_DATA* closestJetway = nullptr;
+
+        for (unsigned int i = 0; i < count; ++i)
+        {
+            SIMCONNECT_JETWAY_DATA& jetway = pJetwayData->rgData[i];
+
+            // Calculate the distance to the jetway from the current position
+            double distance = sqrt(pow(jetway.Lla.Latitude - myLatitude, 2) + pow(jetway.Lla.Longitude - myLongitude, 2));
+            if (distance < closestJetwayDistance) {
+                closestJetwayDistance = distance;
+                closestJetway = &jetway;
             }
+
+            /*
+            // Debugging outputs for each jetway (optional)
+            std::cout << std::fixed << std::setprecision(6); // Set precision for float
+            std::cout << "Airport ICAO: " << jetway.AirportIcao << std::endl;
+            std::cout << "Parking Index: " << jetway.ParkingIndex << std::endl;
+            std::cout << "Jetway Latitude: " << jetway.Lla.Latitude << std::endl;
+            std::cout << "Jetway Longitude: " << jetway.Lla.Longitude << std::endl;
+            std::cout << "Jetway Altitude: " << jetway.Lla.Altitude << std::endl;
+            std::cout << "Jetway Pitch: " << jetway.Pbh.Pitch << std::endl;
+            std::cout << "Jetway Bank: " << jetway.Pbh.Bank << std::endl;
+            std::cout << "Jetway Heading: " << jetway.Pbh.Heading << std::endl;
+            std::cout << "Jetway Status: " << jetway.Status << std::endl;
+            std::cout << "Attached Door Index: " << jetway.Door << std::endl;
+            std::cout << "Jetway Object ID: " << jetway.JetwayObjectId << std::endl;
+            std::cout << "Attached Object ID: " << jetway.AttachedObjectId << std::endl;
+            */
+
+        }
+
+        // Output closest jetway information
+        if (closestJetway) {
+            std::cout << std::fixed << std::setprecision(6); // Set precision for float
+            std::cout << "\nClosest Jetway:" << std::endl;
+            std::cout << "Airport ICAO: " << closestJetway->AirportIcao << std::endl;
+            std::cout << "Parking Index: " << closestJetway->ParkingIndex << std::endl;
+            std::cout << "Jetway Latitude: " << closestJetway->Lla.Latitude << std::endl;
+            std::cout << "Jetway Longitude: " << closestJetway->Lla.Longitude << std::endl;
+            std::cout << "Jetway Altitude: " << closestJetway->Lla.Altitude << std::endl;
+            std::cout << "Jetway Pitch: " << closestJetway->Pbh.Pitch << std::endl;
+            std::cout << "Jetway Bank: " << closestJetway->Pbh.Bank << std::endl;
+            std::cout << "Jetway Heading: " << closestJetway->Pbh.Heading << std::endl;
+            std::cout << "Jetway Status: " << closestJetway->Status << std::endl;
+            std::cout << "Attached Door Index: " << closestJetway->Door << std::endl;
+            std::cout << "Jetway Object ID: " << closestJetway->JetwayObjectId << std::endl;
+            std::cout << "Attached Object ID: " << closestJetway->AttachedObjectId << std::endl;
+        }
 
         break;
     }
+
+
+    case SIMCONNECT_RECV_ID_SIMOBJECT_DATA_BYTYPE: {
+        SIMCONNECT_RECV_SIMOBJECT_DATA_BYTYPE* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA_BYTYPE*)pData;
+        switch (pObjData->dwRequestID) {
+        case REQUEST_ZULU_TIME:
+        {
+            SimDayOfYear* pDOY = (SimDayOfYear*)&pObjData->dwData;
+            printf("In-Sim ZULU Day of Year: %.0lf\n", pDOY->dayOfYear);
+            break;
+        }
+        default:
+            break;
+        }
+        break;
+    }
+
+    case SIMCONNECT_RECV_ID_AIRPORT_LIST: {
+        SIMCONNECT_RECV_AIRPORT_LIST* pAirList = (SIMCONNECT_RECV_AIRPORT_LIST*)pData;
+        SIMCONNECT_DATA_FACILITY_AIRPORT* airports = (SIMCONNECT_DATA_FACILITY_AIRPORT*)(pAirList + 1);
+
+        for (DWORD i = 0; i < pAirList->dwArraySize; ++i) {
+            double distance = sqrt(pow(airports[i].Latitude - myLatitude, 2) + pow(airports[i].Longitude - myLongitude, 2));
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestAirportIdent = airports[i].Ident; 
+            }
+        }
+
+        if (closestAirportIdent != nullptr) {
+            printf("Closest airport Ident: %s\n", closestAirportIdent);
+            hr = SimConnect_RequestJetwayData(hSimConnect, closestAirportIdent, 0, nullptr);
+            if (hr != S_OK) {
+				printf("Failed to request jetway data\n");
+			}
+        }
+        break;
+    }
+
     case SIMCONNECT_RECV_ID_SIMOBJECT_DATA: 
     {
         SIMCONNECT_RECV_SIMOBJECT_DATA* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA*)pData;
@@ -1082,6 +1176,25 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             if (lat_int == 0 && lon_int == 0) {
 				printf("Aircraft Position: Not available or in Main Menu\n");
 			}
+            else {
+                printf("Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+            }
+            break;
+        }
+        case REQUEST_POSITION_ONCE:
+        {
+            AircraftPosition* pS = (AircraftPosition*)&pObjData->dwData;
+
+            // These will store our current position so we can use with airport list to determine the nearest airport
+            myLatitude = pS->latitude;
+            myLongitude = pS->longitude;
+
+            int lat_int = static_cast<int>(pS->latitude);
+            int lon_int = static_cast<int>(pS->longitude);
+
+            if (lat_int == 0 && lon_int == 0) {
+                printf("Aircraft Position: Not available or in Main Menu\n");
+            }
             else {
                 printf("Our current position is Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
             }
@@ -1206,21 +1319,6 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         break;
     }
 
-    case SIMCONNECT_RECV_ID_SIMOBJECT_DATA_BYTYPE: {
-        SIMCONNECT_RECV_SIMOBJECT_DATA_BYTYPE* pObjData = (SIMCONNECT_RECV_SIMOBJECT_DATA_BYTYPE*)pData;
-        switch (pObjData->dwRequestID) {
-            case REQUEST_ZULU_TIME:
-            {
-                SimDayOfYear* pDOY = (SimDayOfYear*)&pObjData->dwData;
-                printf("In-Sim ZULU Day of Year: %.0lf\n", pDOY->dayOfYear);
-                break;
-            }
-            default:
-            break;
-        }
-        break;
-    }
-
     // I can receive here either szString, dwInteger, or fFloat it will depend on the data type I requested
     case SIMCONNECT_RECV_ID_SYSTEM_STATE: {
         SIMCONNECT_RECV_SYSTEM_STATE* pState = (SIMCONNECT_RECV_SYSTEM_STATE*)pData;
@@ -1334,6 +1432,20 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 currentStatus();
                 break;
             case PAUSE_STATE_FLAG_SIM_PAUSE: {
+
+                // Get our current position so we can determine the nearest airport
+                hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION_ONCE, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
+                if (hr != S_OK) {
+                    printf("\nFailed to obtain our position\n");
+                }
+                else {
+                    // Try to obtain ther closest airport to the user aircraft
+                    hr = SimConnect_RequestFacilitiesList_EX1(hSimConnect, SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT, REQUEST_CLOSEST_AIRPORT);
+                    if (hr != S_OK) {
+                        printf("\nFailed to obtain closest airport to our position\n");
+                    }
+                }
+
                 wasSoftPaused = TRUE; // Set it so than we simulation starts we know it came from a soft pause
                 if (!isFinalSave && !isOnMenuScreen && isFirstSave) {
                     isPauseBeforeStart = TRUE;
