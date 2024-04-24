@@ -28,6 +28,7 @@ void initApp() {
     // Initilize Facility Definitions (for data I might need)
     hr = SimConnect_AddToFacilityDefinition(hSimConnect, DEFINITION_FACILITY_AIRPORT, "OPEN AIRPORT");
     hr = SimConnect_AddToFacilityDefinition(hSimConnect, DEFINITION_FACILITY_AIRPORT, "NAME64");
+    hr = SimConnect_AddToFacilityDefinition(hSimConnect, DEFINITION_FACILITY_AIRPORT, "ICAO");
 
     hr = SimConnect_AddToFacilityDefinition(hSimConnect, DEFINITION_FACILITY_AIRPORT, "OPEN TAXI_PARKING");
     hr = SimConnect_AddToFacilityDefinition(hSimConnect, DEFINITION_FACILITY_AIRPORT, "NAME");
