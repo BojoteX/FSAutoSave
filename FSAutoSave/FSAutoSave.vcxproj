@@ -133,19 +133,24 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(MSFS_SDK)\SimConnect SDK\lib\static</AdditionalLibraryDirectories>
-      <AdditionalDependencies>SimConnect.lib;shlwapi.lib;user32.lib;Ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SimConnect.lib;shlwapi.lib;user32.lib;Ws2_32.lib;Version.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="FSAutoSave.cpp" />
+    <ClCompile Include="Globals.cpp" />
+    <ClCompile Include="Utility.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Globals.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="Utility.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="FSAutoSave.rc" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="FSAutoSave.ico" />
     <Image Include="\\LAPTOP-JESUS\FSAutoSave\FSAutoSave\FSAutoSave.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
