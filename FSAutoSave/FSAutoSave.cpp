@@ -821,13 +821,12 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
 
     // Print the startup banner.
     printf(
-        "\n%s - %s v%s (%s)\n"
+        "\n%s v%s - %s\n"
         "%s by %s\n"
         "\n",
         productName.c_str(),
-        fileDescription.c_str(),
         productVersion.c_str(),
-        fileVersion.c_str(),
+        fileDescription.c_str(),
         legalCopyright.c_str(),
         companyName.c_str()
     );
