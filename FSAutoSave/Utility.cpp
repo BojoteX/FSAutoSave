@@ -557,9 +557,6 @@ void finalFLTchange() {
         {"Briefing", {
             {"BriefingText", dynamicBrief },
         }},
-        {"Assistance", {
-               {"Preset", "ASSISTANCE_PRESET_AVERAGE_PLAYER"},
-        }},
     };
 
     // Create a map of changes if the bug was not fixed (or not present) for the LAST.FLT file
@@ -587,9 +584,6 @@ void finalFLTchange() {
         {"Briefing", {
             {"BriefingText", dynamicBrief },
         }},
-        {"Assistance", {
-               {"Preset", "ASSISTANCE_PRESET_AVERAGE_PLAYER"},
-        }},
     };
 
     // Create a map of changes if the bug was not fixed (or not present) for the CUSTOMFLIGHT.FLT file
@@ -616,9 +610,6 @@ void finalFLTchange() {
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
-        }},
-        {"Assistance", {
-               {"Preset", "ASSISTANCE_PRESET_AVERAGE_PLAYER"},
         }},
     };
 
@@ -866,6 +857,7 @@ void fixCustomFlight() {
     }
 
     std::map<std::string, std::map<std::string, std::string>> fixState = { {
+             {"Assistance", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section.
              {"LivingWorld", {{"AirportLife", enableAirportLife }}},
              {"FreeFlight", {{"FirstFlightState", gateSTATE }}},
              {"SimScheduler", {{"SimTime", "1.0" }}},

@@ -733,14 +733,6 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         }
     }
 
-    case SIMCONNECT_RECV_ID_EXCEPTION:
-    {
-        SIMCONNECT_RECV_EXCEPTION* except = (SIMCONNECT_RECV_EXCEPTION*)pData;
-        printf("Exception received: %d, SendID: %d, Index: %d\n", except->dwException, except->dwSendID, except->dwIndex);
-        currentStatus();
-        break;
-    }
-
     case SIMCONNECT_RECV_ID_FACILITY_MINIMAL_LIST:
     {
         SIMCONNECT_RECV_FACILITY_MINIMAL_LIST* msg = (SIMCONNECT_RECV_FACILITY_MINIMAL_LIST*)pData;
@@ -753,6 +745,14 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         }
 
         int randIndex = rand() % msg->dwArraySize;
+        break;
+    }
+
+    case SIMCONNECT_RECV_ID_EXCEPTION:
+    {
+        SIMCONNECT_RECV_EXCEPTION* except = (SIMCONNECT_RECV_EXCEPTION*)pData;
+        printf("Exception received: %d, SendID: %d, Index: %d (ID is %d)\n", except->dwException, except->dwSendID, except->dwIndex, except->dwID);
+        currentStatus();
         break;
     }
 
