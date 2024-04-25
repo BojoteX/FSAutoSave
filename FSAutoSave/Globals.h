@@ -36,9 +36,10 @@ extern const char* szDescription;
 extern double myLatitude;
 extern double myLongitude;
 
-extern char* airportICAO;
-extern char* airportName;
+extern std::string airportICAO;
+extern std::string airportName;
 extern std::string parkingGate;
+extern std::string parkingGateSuffix;
 extern unsigned parkingNumber;
 
 extern std::string currentAircraft;

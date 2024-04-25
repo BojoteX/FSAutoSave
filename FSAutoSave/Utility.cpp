@@ -1,6 +1,7 @@
 #include <Windows.h>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <iostream>
 #include "SimConnect.h"
 #include "Globals.h"
@@ -452,6 +453,27 @@ void fixMSFSbug(const std::string& filePath) {
     printf("\n[ERROR] ********* [ FAILED TO READ %s ] *********\n", MODfile.c_str());
 }
 
+std::string formatDuration(int totalSeconds) {
+    int hours = totalSeconds / 3600; // Calculate total hours
+    int minutes = (totalSeconds % 3600) / 60; // Calculate remaining minutes
+    int seconds = totalSeconds % 60; // Calculate remaining seconds
+
+    std::stringstream ss;
+    if (hours > 0) {
+        ss << hours << " hour" << (hours > 1 ? "s" : "");
+    }
+    if (minutes > 0) {
+        if (ss.tellp() > 0) ss << ", "; // Add a comma if there's already something in ss
+        ss << minutes << " minute" << (minutes > 1 ? "s" : "");
+    }
+    if (seconds > 0 || totalSeconds == 0) { // Include seconds if it's the only value or not zero
+        if (ss.tellp() > 0) ss << ", "; // Add a comma if there's already something in ss
+        ss << seconds << " second" << (seconds > 1 ? "s" : "");
+    }
+
+    return ss.str();
+}
+
 void finalFLTchange() {
     // This will ALSO execute on the first run of the program to set the initial state of the .FLT files or when exiting a flight, so check for MAINMENU.FLT or empty string 
     // if you want to skip any of the conditions below 
@@ -459,23 +481,35 @@ void finalFLTchange() {
     std::string customFlightmod = MSFSPath + "\\" + szFileName + ".FLT";
     std::string lastMOD = MSFSPath + "\\LAST.FLT";
 
+    std::string flightVersion = readConfigFile(lastMOD, "Main", "FlightVersion"); // Autoincremented version of the flight
+    if (flightVersion.empty() || flightVersion == "0") {
+		flightVersion = "1";
+	}
+
+    std::string elapsedTimeLeg = readConfigFile(lastMOD, "SimScheduler", "SimTime"); // Elapsed time in seconds (String)
+    std::string aircraftSignature = readConfigFile(lastMOD, "Sim.0", "Sim"); // PMDG 737 - 800 American Airlines (N666JA)
+    elapsedTimeLeg = formatDuration(std::stoi(elapsedTimeLeg));
+    std::string dynamicBrief = "Welcome back! ready to resume your " + aircraftSignature + " flight? Currently " + elapsedTimeLeg + " of flight time since your original flight.";
+
     std::string dynamicTitle = "Resume your flight";
-    std::string dynamicBrief = "Welcome back! ready to resume your flight?";
+    std::string description = "Welcome back! ready to resume your flight?";
+
+    std::map<std::string, std::map<std::string, std::string>> finalsave;
+    std::map<std::string, std::map<std::string, std::string>> finalsave1;
+    std::map<std::string, std::map<std::string, std::string>> finalsave2;
 
     // Define or compute your variable
     std::string missionLocation;
-    if (airportName == nullptr || *airportName == '\0' || !airportName) {
-        missionLocation = "";
-    }
-    else {
-        missionLocation = "$$: " + std::string(airportName);
-        printf("You are at %s (%s) | %s %u\n", airportName, airportICAO, parkingGate.c_str(), parkingNumber);
-
-        // Reset the variables as we are done with them
-        airportICAO = nullptr;  // Reset the airport name
-        airportName = nullptr;  // Reset the airport name
-        parkingGate.clear();    // Reset the parking gate
-        parkingNumber = 0;      // Reset the parking number
+    std::string isSimOnGround = readConfigFile(lastMOD, "SimVars.0", "SimOnGround"); // True or False (String)
+    if (!airportName.empty()) {
+        if (isSimOnGround == "True") {
+            printf("You are at %s (%s) | %s %u (Suffix is %s)\n", airportName.c_str(), airportICAO.c_str(), parkingGate.c_str(), parkingNumber, parkingGateSuffix.c_str());
+            missionLocation = "$$: " + airportName;
+        }
+        else {
+            printf("You are currently flying near %s (%s)\n", airportName.c_str(), airportICAO.c_str());
+            missionLocation = "$$: Enroute, close to " + airportName;
+        }
     }
 
     std::string ffSTATE1 = readConfigFile(lastMOD, "FreeFlight", "FirstFlightState");
@@ -493,8 +527,13 @@ void finalFLTchange() {
 
         //               THIS MAP IS FOR BOTH LAST.FLT AND CUSTOMFLIGHT.FLT FILES WHEN ENDING A FLIGHT              //
 
-    std::map<std::string, std::map<std::string, std::string>> finalsave = {
-        {"Departure", {{"!DELETE_SECTION!", "!DELETE!"}}},  // Used to DELETE entire section. 
+    finalsave = {
+        {"Departure", {
+            {"ICAO", airportICAO },
+			{"GateName", parkingGate },
+			{"GateNumber", std::to_string(parkingNumber) },
+			{"GateSuffix", parkingGateSuffix }
+        }},
         {"Arrival", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
         {"LivingWorld", {
             {"AirportLife", enableAirportLife },
@@ -510,8 +549,9 @@ void finalFLTchange() {
         }},
         {"Main", {
             {"Title", dynamicTitle },
-            {"Description", missionLocation },
+            {"Description", description },
             {"MissionLocation", missionLocation},
+            {"FlightVersion", std::to_string(std::stoi(flightVersion))},
             {"OriginalFlight", ""},
         }},
         {"Briefing", {
@@ -526,11 +566,14 @@ void finalFLTchange() {
 
             //               THIS MAP IS FOR LAST.FLT FOR A REGULAR SAVE              //
 
-    std::map<std::string, std::map<std::string, std::string>> finalsave1 = {
+    finalsave1 = {
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"FreeFlight", {{"FirstFlightState", ffSTATE1}}},
         {"Main", {
             {"Title", dynamicTitle },
+            {"MissionLocation", missionLocation},
+            {"Description", description },
+            {"FlightVersion", std::to_string(std::stoi(flightVersion))},
         }},
         {"ResourcePath", {
             {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight"},
@@ -553,11 +596,14 @@ void finalFLTchange() {
 
                 //               THIS MAP IS FOR CUSTOMFLIGHT.FLT FOR A REGULAR SAVE              //
 
-    std::map<std::string, std::map<std::string, std::string>> finalsave2 = {
+    finalsave2 = {
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"FreeFlight", {{"FirstFlightState", ffSTATE2}}},
         {"Main", {
             {"Title", dynamicTitle },
+            {"MissionLocation", missionLocation},
+            {"Description", description },
+            {"FlightVersion", std::to_string(std::stoi(flightVersion))},
         }},
         {"ResourcePath", {
             {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight"},
@@ -607,6 +653,13 @@ void finalFLTchange() {
         printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", customFlightmod.c_str());
     else
         printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", customFlightmod.c_str());
+
+    // Reset the variables as we are done with them
+    airportICAO.clear();      // Reset the airport name
+    airportName.clear();      // Reset the airport name
+    parkingGate.clear();        // Reset the parking gate
+    parkingGateSuffix.clear();  // Reset the parking suffix
+    parkingNumber = 0;          // Reset the parking number
 }
 
 void initialFLTchange() { // We just wrap the finalFLTchange() function here as we only need to call it once
@@ -632,6 +685,7 @@ void saveNotAllowed() {
         // MODIFY the .FLT file to set the FirstFlightState to PREFLIGHT_GATE but only do it for the final save and when flight is LAST.FLT
         if (currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") {
             // Make all neccessary changes to the .FLT files
+            printf("\n[INFO] Running finalFLTchange() \n");
             finalFLTchange();
         }
     }

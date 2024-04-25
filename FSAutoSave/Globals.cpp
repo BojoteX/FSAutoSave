@@ -31,9 +31,10 @@ const char* szDescription = "This is a save of your last flight so you can resum
 double myLatitude = 0.0;
 double myLongitude = 0.0;
 
-char* airportName = nullptr;
-char* airportICAO = nullptr;
+std::string airportName;
+std::string airportICAO;
 std::string parkingGate;
+std::string parkingGateSuffix;
 unsigned parkingNumber;
 
 std::string currentAircraft;

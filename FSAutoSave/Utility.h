@@ -11,6 +11,7 @@ bool isMSFSDirectoryWritable(const std::string& directoryPath);
 
 int monitorCustomFlightChanges();
 
+std::string formatDuration(int totalSeconds);
 std::string get_env_variable(const char* env_var);
 std::string getMSFSdir();
 std::string getCommunityPath(const std::string& user_cfg_path);

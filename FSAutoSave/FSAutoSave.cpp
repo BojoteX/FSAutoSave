@@ -142,8 +142,8 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             sAirport* airport = (sAirport*)&pFacilityData->Data;
 
             printf("Airport name is %s (%s)\n", airport->name, airport->icao);
-            airportName = airport->name;
-            airportICAO = airport->icao;
+            airportName = std::string(airport->name);
+            airportICAO = std::string(airport->icao);
             break;
         }
 
@@ -169,8 +169,10 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
             if (countTaxiParking == parkingIndex && parkingIndex != NULL) {
                 GateInfo gateInfo = formatGateName(taxiparking->NAME);
+                GateInfo gateSuffixInfo = formatGateName(taxiparking->SUFFIX);
                 printf("Closest gate is %s %d (%s)\n", gateInfo.friendlyName.c_str(), taxiparking->NUMBER, gateInfo.gateString.c_str());
                 parkingGate = gateInfo.gateString;
+                parkingGateSuffix = gateSuffixInfo.gateString;
                 parkingNumber = taxiparking->NUMBER;
             }
 
@@ -467,7 +469,6 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 }
             }
             else {
-                fpDisableCount++;
                 printf("\n[SITUATION EVENT] No flight plan activated\n");
             }
             currentStatus();
@@ -692,6 +693,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 currentFlightPlan = ""; // Reset the flight plan
                 currentFlightPlanPath = ""; // Reset the flight plan Path
                 isFlightPlanActive = FALSE;
+                fpDisableCount++;
                 currentStatus();
                 break;
             case EVENT_SIM_START: {
