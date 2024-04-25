@@ -887,7 +887,7 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
     else {
         // Check if the user wants to reset the saved situations. We call the function to RESET the saves and then exit the program.
         if (resetSaves) {
-            printf("[RESET] To RESET saved situations run this program where MSFS is installed\n");
+            printf("[RESET] In order to RESET saved situations you need to run this program where MSFS is installed\n");
             waitForEnter();  // Ensure user presses Enter
             return 0;
         }

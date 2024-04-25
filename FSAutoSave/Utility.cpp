@@ -30,14 +30,14 @@ bool enableANSI() {
 void SafeCopyPath(const wchar_t* source) {
     errno_t err = wcscpy_s(GetFPpath, _countof(GetFPpath), source);
     if (err != 0) {
-        wprintf(L"\n[ERROR] Could not get GetFP.exe path. Error code: %d\n", err);
+        wprintf(L"[ERROR] Could not get GetFP.exe path. Error code: %d\n", err);
     }
     else {
         if (fs::exists(GetFPpath)) {
-            wprintf(L"\n[INFO] Simbrief integration enabled using %s\n", GetFPpath);
+            wprintf(L"[INFO] Simbrief integration enabled using %s\n", GetFPpath);
         }
         else {
-            wprintf(L"\n[INFO] You tried to enable Simbrief integration with GetFP.exe, but path %s is wrong (file does not exist)\n", GetFPpath);
+            wprintf(L"[INFO] You tried to enable Simbrief integration with GetFP.exe, but path %s is wrong (file does not exist)\n", GetFPpath);
             std::fill(GetFPpath, GetFPpath + _countof(GetFPpath), L'\0');  // Properly clear the array
         }
     }
@@ -858,7 +858,7 @@ void fixCustomFlight() {
     if (gateSTATE.empty()) {
         gateSTATE = "PREFLIGHT_GATE"; // Set the default value
     }
-    else if (gateSTATE == "LANDING_GATE" || gateSTATE == "WAITING") {
+    else if (gateSTATE == "LANDING_TAXI" || gateSTATE == "LANDING_GATE" || gateSTATE == "WAITING") {
         gateSTATE = "PREFLIGHT_GATE"; // Set the default value
     }
     else if (gateSTATE == "PREFLIGHT_PUSHBACK") {
@@ -866,8 +866,9 @@ void fixCustomFlight() {
     }
 
     std::map<std::string, std::map<std::string, std::string>> fixState = { {
-             {"LivingWorld", {{"AirportLife", enableAirportLife}}},
-             {"FreeFlight", {{"FirstFlightState", gateSTATE}}},
+             {"LivingWorld", {{"AirportLife", enableAirportLife }}},
+             {"FreeFlight", {{"FirstFlightState", gateSTATE }}},
+             {"SimScheduler", {{"SimTime", "1.0" }}},
     } };
 
     std::string ffSTATEprev = readConfigFile(customFlightfile, "LivingWorld", "AirportLife");
