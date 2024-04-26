@@ -419,6 +419,36 @@ std::string modifyConfigFile(const std::string& filePath, const std::map<std::st
     return filePath;  // Return the file path if all operations are successful
 }
 
+void fixLASTflight(const std::string& filePath) {
+    // Check if the last flight state is set to LANDING_GATE or WAITING and FIX it. Also we change PREFLIGHT_TAXI to PREFLIGHT_GATE for consistency 
+
+    std::string MODfile = filePath;
+
+    if (!DEBUG) {
+        std::map<std::string, std::map<std::string, std::string>> fixLAST = {
+            {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
+            {"Main", {
+                {"AppVersion", "10.0.61355" },
+            }},
+        };
+        std::string applyFIX = modifyConfigFile(MODfile, fixLAST);
+        MODfile = NormalizePath(MODfile);
+        if (!applyFIX.empty()) {
+            printf("\n[FIX] Checking LAST.FLT for errors\n");
+        }
+        else {
+            printf("\n[ERROR] ********* [ %s READ OK, BUT FAILED TO FIX BUG ] *********\n", MODfile.c_str());
+        }
+        return;
+    }
+    else {
+        printf("\n[DEBUG] ********* [ %s READ OK - NO modifications were made as we are in DEBUG mode ] *********\n", MODfile.c_str());
+    }
+
+    MODfile = NormalizePath(MODfile);
+    printf("\n[ERROR] ********* [ FAILED TO READ %s ] *********\n", MODfile.c_str());
+}
+
 void fixMSFSbug(const std::string& filePath) {
     // Check if the last flight state is set to LANDING_GATE or WAITING and FIX it. Also we change PREFLIGHT_TAXI to PREFLIGHT_GATE for consistency 
 
@@ -535,24 +565,26 @@ void finalFLTchange() {
 			{"GateSuffix", parkingGateSuffix }
         }},
         {"Arrival", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
+        {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
         {"LivingWorld", {
             {"AirportLife", enableAirportLife },
         }},
         {"ResourcePath", {
-            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight"},
+            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"ObjectFile", {
-            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight"},
+            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
-            {"WeatherCanBeLive", "True"},
+            {"WeatherCanBeLive", "True" },
         }},
         {"Main", {
             {"Title", dynamicTitle },
             {"Description", description },
-            {"MissionLocation", missionLocation},
-            {"FlightVersion", std::to_string(std::stoi(flightVersion))},
-            {"OriginalFlight", ""},
+            {"MissionLocation", missionLocation },
+            {"AppVersion", "10.0.61355" },
+            {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
+            {"OriginalFlight", "" },
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
@@ -564,22 +596,24 @@ void finalFLTchange() {
             //               THIS MAP IS FOR LAST.FLT FOR A REGULAR SAVE              //
 
     finalsave1 = {
+        {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"FreeFlight", {{"FirstFlightState", ffSTATE1}}},
         {"Main", {
             {"Title", dynamicTitle },
-            {"MissionLocation", missionLocation},
+            {"MissionLocation", missionLocation },
             {"Description", description },
-            {"FlightVersion", std::to_string(std::stoi(flightVersion))},
+            {"AppVersion", "10.0.61355" },
+            {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
         }},
         {"ResourcePath", {
-            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight"},
+            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"ObjectFile", {
-            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight"},
+            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
-            {"WeatherCanBeLive", "True"},
+            {"WeatherCanBeLive", "True" },
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
@@ -591,22 +625,24 @@ void finalFLTchange() {
                 //               THIS MAP IS FOR CUSTOMFLIGHT.FLT FOR A REGULAR SAVE              //
 
     finalsave2 = {
+        {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"FreeFlight", {{"FirstFlightState", ffSTATE2}}},
         {"Main", {
             {"Title", dynamicTitle },
-            {"MissionLocation", missionLocation},
+            {"MissionLocation", missionLocation },
             {"Description", description },
-            {"FlightVersion", std::to_string(std::stoi(flightVersion))},
+            {"AppVersion", "10.0.61355" },
+            {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
         }},
         {"ResourcePath", {
-            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight"},
+            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"ObjectFile", {
-            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight"},
+            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
-            {"WeatherCanBeLive", "True"},
+            {"WeatherCanBeLive", "True" },
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
@@ -646,8 +682,8 @@ void finalFLTchange() {
         printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", customFlightmod.c_str());
 
     // Reset the variables as we are done with them
-    airportICAO.clear();      // Reset the airport name
-    airportName.clear();      // Reset the airport name
+    airportICAO.clear();        // Reset the airport name
+    airportName.clear();        // Reset the airport name
     parkingGate.clear();        // Reset the parking gate
     parkingGateSuffix.clear();  // Reset the parking suffix
     parkingNumber = 0;          // Reset the parking number
@@ -781,6 +817,7 @@ void firstSave() {
         if (!DEBUG) {
             SimConnect_FlightPlanLoad(hSimConnect, ""); // Activate the most current flight plan        
             SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN"); // Activate the most current flight plan
+            printf("\n[INFO] Initiating first SAVE...\n");
             SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
         }
         else {
@@ -792,6 +829,7 @@ void firstSave() {
         userLoadedPLN = FALSE; // Reset the flag again as there is a special case here
         printf("\n[INFO] User has opened LAST.FLT (for 3 or more legs) to RESUME a flight originally started loading the LAST.PLN file.\nMSFS ATC will be active using the current LAST.PLN file as your active Flight Plan\n");
         if (!DEBUG) {
+            printf("\n[INFO] Initiating first SAVE...\n");
             SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
         }
         else {
@@ -806,6 +844,7 @@ void firstSave() {
         else if (currentFlight == "LAST.FLT") {
             printf("\n[INFO] User RESUMED a flight with only DEPARTURE or DEPARTURE + ARRIVAL selected.\nNo flight plan is loaded or needed\n");
             if (!DEBUG) {
+                printf("\n[INFO] Initiating first SAVE...\n");
                 SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
             }
             else {
@@ -826,11 +865,9 @@ void finalSave() {
     isFinalSave = TRUE;
     isFirstSave = FALSE;
 
-    // We save BOTH to avoid discrepancies when starting a flight from the menu as CUSTOMFLIGHT.FLT is used 
-    // when selecting DEPARTURE/DESTINATION directly to start a flight. DO NOT CHANGE THIS
+    // We ONLY save LAST.FLT as CustomFlight is used to start only FRESH flights 
 
     if (!DEBUG) {
-        SimConnect_FlightSave(hSimConnect, szFileName, "My previous flight", "FSAutoSave Generated File", 0);
         SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
     }
     else {
@@ -915,6 +952,9 @@ int monitorCustomFlightChanges() {
                     // Modify CustomFlight.FLT file to fix MSFS bug
                     fixCustomFlight();
                 }
+                else {
+					printf("\n[INFO] File %s changed but no action taken\n", narrowFile.c_str());
+				}
 
                 pNotify = pNotify->NextEntryOffset ? reinterpret_cast<FILE_NOTIFY_INFORMATION*>((BYTE*)pNotify + pNotify->NextEntryOffset) : NULL;
             } while (pNotify != NULL);

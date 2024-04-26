@@ -28,8 +28,11 @@ const char* szFileName = "Missions\\Custom\\CustomFlight\\CustomFlight";
 const char* szTitle = "FSAutoSave generated file";
 const char* szDescription = "This is a save of your last flight so you can resume exactly where you left.";
 
-double myLatitude = 0.0;
-double myLongitude = 0.0;
+double myLatitude	 = 0.0;
+double myLongitude	 = 0.0;
+double myAltitude	 = 0.0;
+double myAirspeed	 = 0.0;
+double isSimOnGround = 0.0;
 
 std::string airportName;
 std::string airportICAO;
@@ -60,4 +63,5 @@ bool isFinalSave = FALSE;
 bool isFirstSave = FALSE;
 bool isPauseBeforeStart = FALSE;
 bool userLoadedPLN = FALSE;
+bool flightInitialized = FALSE;
 DWORD isSimRunning = 0;

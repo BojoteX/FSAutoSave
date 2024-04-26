@@ -42,11 +42,18 @@ void initApp() {
         printf("\nFailed to Add to Data Definition\n");
     }
 
-    // My Data Definitions (for data I might need from Simvars)
-    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "Plane Latitude", "degrees");
-    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "Plane Longitude", "degrees");
+    // To determine aircraft position and state
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE LATITUDE", "degrees");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE LONGITUDE", "degrees");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE ALTITUDE", "feet");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "AIRSPEED TRUE", "knots");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "SIM ON GROUND", "Bool");
+
+    // To determine where we are in the menus
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_CAMERA_STATE, "CAMERA STATE", "number");
-    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ZULU_TIME, "ZULU DAY OF YEAR", "number");
+
+    // ZULU Time Data Definition to obtain day of year (not really used as we can get it from the actual system clock)
+    // hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_ZULU_TIME, "ZULU DAY OF YEAR", "number");
 
     // One request for the user aircraft position polls every second, the other request for the user aircraft position polls only once
     // hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_SECOND, SIMCONNECT_DATA_REQUEST_FLAG_CHANGED);
@@ -94,10 +101,12 @@ void initApp() {
     hr = SimConnect_MapClientEventToSimEvent(hSimConnect, EVENT_FLIGHTPLAN_LOAD, "custom.fp.load");
     hr = SimConnect_MapClientEventToSimEvent(hSimConnect, EVENT_SITUATION_SAVE, "custom.save");
     hr = SimConnect_MapClientEventToSimEvent(hSimConnect, EVENT_SITUATION_RELOAD, "custom.reload");
+    hr = SimConnect_MapClientEventToSimEvent(hSimConnect, EVENT_CLOSEST_AIRPORT, "custom.position");
 
     // Input Events
-    hr = SimConnect_MapInputEventToClientEvent_EX1(hSimConnect, INPUT0, "esc", EVENT_SITUATION_SAVE);
-    hr = SimConnect_MapInputEventToClientEvent_EX1(hSimConnect, INPUT0, "VK_LCONTROL+VK_LMENU+s", EVENT_SITUATION_SAVE);
+    // hr = SimConnect_MapInputEventToClientEvent_EX1(hSimConnect, INPUT0, "esc", EVENT_SITUATION_SAVE);
+    hr = SimConnect_MapInputEventToClientEvent_EX1(hSimConnect, INPUT0, "VK_LCONTROL+VK_LMENU+s", EVENT_SITUATION_SAVE, 55);
+    hr = SimConnect_MapInputEventToClientEvent_EX1(hSimConnect, INPUT0, "VK_LCONTROL+VK_LMENU+p", EVENT_CLOSEST_AIRPORT);
 
     // Disable the following as they are not needed for now. Maybe future use
     // hr = SimConnect_MapInputEventToClientEvent_EX1(hSimConnect, INPUT0, "VK_RMENU+f", EVENT_FLIGHTPLAN_LOAD);
@@ -111,6 +120,7 @@ void initApp() {
     hr = SimConnect_AddClientEventToNotificationGroup(hSimConnect, GROUP0, EVENT_FLIGHTPLAN_LOAD);
     hr = SimConnect_AddClientEventToNotificationGroup(hSimConnect, GROUP0, EVENT_SITUATION_RELOAD);
     hr = SimConnect_AddClientEventToNotificationGroup(hSimConnect, GROUP0, EVENT_SITUATION_SAVE);
+    hr = SimConnect_AddClientEventToNotificationGroup(hSimConnect, GROUP0, EVENT_CLOSEST_AIRPORT);
 
     // Set priority for the notification group
     hr = SimConnect_SetNotificationGroupPriority(hSimConnect, GROUP0, SIMCONNECT_GROUP_PRIORITY_HIGHEST);
@@ -132,6 +142,11 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     switch (pData->dwID)
     {
 
+    case SIMCONNECT_RECV_ID_NULL: {
+        printf("NULL received\n");
+        break;
+    }
+
     case SIMCONNECT_RECV_ID_FACILITY_DATA: {
         SIMCONNECT_RECV_FACILITY_DATA* pFacilityData = (SIMCONNECT_RECV_FACILITY_DATA*)pData;
 
@@ -149,6 +164,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
         case SIMCONNECT_FACILITY_DATA_RUNWAY:
         {
+            printf("Runway data received. NOT IMPLEMENTED YET\n");
             break;
         }
 
@@ -182,25 +198,30 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
         case SIMCONNECT_FACILITY_DATA_TAXI_PATH:
         {
+            printf("Taxi path data received. NOT IMPLEMENTED YET\n");
             break;
         }
 
         case SIMCONNECT_FACILITY_DATA_FREQUENCY:
         {
+            printf("Frequency data received. NOT IMPLEMENTED YET\n");
             break;
         }
 
         case SIMCONNECT_FACILITY_DATA_VOR:
         {
+            printf("VOR data received. NOT IMPLEMENTED YET\n");
             break;
         }
 
         case SIMCONNECT_FACILITY_DATA_WAYPOINT:
         {
+            printf("Waypoint data received. NOT IMPLEMENTED YET\n");
             break;
         }
 
         default:
+            printf("Unhandled request ID: %lu\n", pFacilityData->UserRequestId); // Log unhandled request IDs
             break;
         }
         break;
@@ -222,30 +243,29 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         SIMCONNECT_RECV_JETWAY_DATA* pJetwayData = (SIMCONNECT_RECV_JETWAY_DATA*)pData;
         unsigned int count = static_cast<unsigned int>(pJetwayData->dwArraySize);
 
-        // Variables to find the closest jetway
-        double closestJetwayDistance = std::numeric_limits<double>::max();
+        if (count > 0) {
+            double closestJetwayDistance = std::numeric_limits<double>::max();
+            SIMCONNECT_JETWAY_DATA* closestJetway = nullptr;
+            parkingIndex = 0;  // Initialize the parking index to 0
 
-        SIMCONNECT_JETWAY_DATA* closestJetway = nullptr;
+            for (unsigned int i = 0; i < count; ++i)
+            {
+                SIMCONNECT_JETWAY_DATA& jetway = pJetwayData->rgData[i];
+                std::cout << std::fixed << std::setprecision(6); // Set precision for float
 
-        // Initialize the parking index to 0
-        parkingIndex = 0;
+                double distance = sqrt(pow(jetway.Lla.Latitude - myLatitude, 2) + pow(jetway.Lla.Longitude - myLongitude, 2));
+                if (distance < closestJetwayDistance) {
+                    closestJetwayDistance = distance;
+                    closestJetway = &jetway;
+                }
+            }
 
-        for (unsigned int i = 0; i < count; ++i)
-        {
-            SIMCONNECT_JETWAY_DATA& jetway = pJetwayData->rgData[i];
-            std::cout << std::fixed << std::setprecision(6); // Set precision for float
-
-            // Calculate the distance to the jetway from the current position
-            double distance = sqrt(pow(jetway.Lla.Latitude - myLatitude, 2) + pow(jetway.Lla.Longitude - myLongitude, 2));
-            if (distance < closestJetwayDistance) {
-                closestJetwayDistance = distance;
-                closestJetway = &jetway;
+            if (closestJetway) {
+                parkingIndex = closestJetway->ParkingIndex;
             }
         }
-
-        // Store index for closest jetway
-        if (closestJetway) {
-            parkingIndex = closestJetway->ParkingIndex;
+        else {
+            printf("No Jetways found\n");
         }
 
         break;
@@ -261,12 +281,13 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             break;
         }
         default:
+            printf("Unhandled request ID: %lu\n", pObjData->dwRequestID); // Log unhandled request IDs
             break;
         }
         break;
     }
 
-    case SIMCONNECT_RECV_ID_AIRPORT_LIST: {
+    case SIMCONNECT_RECV_ID_AIRPORT_LIST: { // DEFINITION_POSITION_DATA - Requested once
         SIMCONNECT_RECV_AIRPORT_LIST* pAirList = (SIMCONNECT_RECV_AIRPORT_LIST*)pData;
 
         // Initialize or reset the closest airport details
@@ -290,18 +311,24 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             if (recordFound && closestAirportIdent[0] != '\0') {
                 printf("Closest airport Ident: %s\n", closestAirportIdent);
 
-                hr = SimConnect_RequestJetwayData(hSimConnect, closestAirportIdent, 0, nullptr);
-                if (hr != S_OK) {
-                    printf("Failed to request jetway data\n");
-                }
+                if (isSimOnGround) {
+                    printf("You are currently on the ground\n");
+                    hr = SimConnect_RequestJetwayData(hSimConnect, closestAirportIdent, 0, nullptr);
+                    if (hr != S_OK) {
+                        printf("Failed to request jetway data\n");
+                    }
 
-                hr = SimConnect_RequestFacilityData(hSimConnect, DEFINITION_FACILITY_AIRPORT, FACILITY_DATA_DEF_REQUEST_START + g_RequestCount, closestAirportIdent);
-                if (hr == S_OK) {
-                    g_RequestCount++; // Increase the request count to make the REQUEST ID unique
+                    hr = SimConnect_RequestFacilityData(hSimConnect, DEFINITION_FACILITY_AIRPORT, FACILITY_DATA_DEF_REQUEST_START + g_RequestCount, closestAirportIdent);
+                    if (hr == S_OK) {
+                        g_RequestCount++; // Increase the request count to make the REQUEST ID unique
+                    }
+                    else {
+                        printf("\nFailed to obtain airport name\n");
+                    }
                 }
                 else {
-                    printf("\nFailed to obtain airport name\n");
-                }
+					printf("You are currently in the air. Not Jetway/Gate data available.\n");
+				}
             }
             else {
                 printf("No airports found. Check cache\n");
@@ -309,7 +336,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
         }
         else {
-            printf("No airport data received. Possible cache miss or update pending.\n");
+            printf("No airport data received. You are literally in the middle of nowhere ;)\n");
         }
 
         break;
@@ -329,12 +356,17 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         {
             CameraState* pCS = (CameraState*)&pObjData->dwData;
             if (pCS->state == 12) { // 12 is the value for the "World Map" camera state
+                flightInitialized = TRUE;
 
                 std::string customFlightmod = MSFSPath + "\\" + szFileName + ".FLT";
                 std::string lastMOD = MSFSPath + "\\LAST.FLT";
 
-                fixMSFSbug(customFlightmod); // Fix the MSFS bug when entering the World Map
-                fixMSFSbug(lastMOD); // Fix the MSFS bug when entering the World Map
+                // Fix the MSFS bug when entering the World Map
+                fixMSFSbug(customFlightmod); 
+                fixMSFSbug(lastMOD); 
+
+                // Remove LocalVars from LAST.FLT and set the correct .FLT version
+                fixLASTflight(lastMOD); 
 
                 fpDisableCount = 0; // Reset the counter
                 userLoadedPLN = FALSE;
@@ -342,6 +374,28 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 // Use GetFP to get the flight plan when we enter the World Map if using SimBrief
                 std::thread(getFP).detach(); // Spawn a new thread to get the flight plan so we don't block the main thread. It will be cleaned up automatically
 			}
+            else if (pCS->state == 11) { // 11 is used when first loading a flight
+                printf("\nInitializing sim...\n");
+                flightInitialized = TRUE;
+            }
+            else if (pCS->state == 15) { // 15 is used when in the menu screen
+                // printf("\nIn menu screen\n");
+                flightInitialized = TRUE;
+            }
+            else if (pCS->state == 2) { // 2 is used when in the sim/cockpit
+                // printf("\nIn Cockpit\n");
+                flightInitialized = FALSE;
+            }
+            else {
+                flightInitialized = FALSE;
+                // Check if pObjData and pCS pointers are valid
+                if (pObjData && pCS) {
+                    printf("Camera state is %0.f\n", pCS->state);
+                }
+                else {
+                    printf("Invalid data pointer(s). Unable to retrieve camera state.\n");
+                }
+            }
             break;
         }
         case REQUEST_POSITION:
@@ -355,7 +409,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 				printf("Aircraft Position: Not available or in Main Menu\n");
 			}
             else {
-                printf("Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+                printf("Latitude: %f - Longitude: %f - Altitude: %.0f feet - Airspeed: %.0f knots - isOnGround: %.0f\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed, pS->sim_on_ground);
             }
             break;
         }
@@ -364,8 +418,11 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             AircraftPosition* pS = (AircraftPosition*)&pObjData->dwData;
 
             // These will store our current position so we can use with airport list to determine the nearest airport
-            myLatitude = pS->latitude;
-            myLongitude = pS->longitude;
+            myLatitude      = pS->latitude;
+            myLongitude     = pS->longitude;
+            myAltitude      = pS->altitude;
+            myAirspeed      = pS->airspeed;
+            isSimOnGround   = pS->sim_on_ground;
 
             int lat_int = static_cast<int>(pS->latitude);
             int lon_int = static_cast<int>(pS->longitude);
@@ -374,7 +431,18 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 printf("Aircraft Position: Not available or in Main Menu\n");
             }
             else {
-                printf("Our current position is Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+                if (pS->sim_on_ground) {
+                    if (pS->airspeed == 0) {
+                        printf("Currently parked at Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+                    }
+                    else {
+                        printf("On the ground, moving at %.0f knots. Current position is Latitude: %f - Longitude: %f\n", pS->airspeed, pS->latitude, pS->longitude);
+                    }
+                }
+                else {
+                    printf("Current position is Latitude: %f - Longitude: %f - Altitude: %.0f feet - Airspeed: %.0f knots.\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed);
+ 
+                }
             }
             break;
         }
@@ -385,8 +453,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             break;
         }
         default:
-            if(DEBUG)
-                printf("Unhandled request ID: %lu\n", pObjData->dwRequestID); // Log unhandled request IDs
+            printf("Unhandled request ID: %lu\n", pObjData->dwRequestID); // Log unhandled request IDs
             break;
         }
         break;
@@ -406,6 +473,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
             break;
         default:
+            printf("Unhandled event ID for SIMCONNECT_RECV_ID_EVENT_FRAME: %lu\n", evt->uEventID); // Log unhandled request IDs
             break;
         }
         break;
@@ -489,6 +557,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             break;
         }
         default:
+            printf("Unhandled event ID for SIMCONNECT_RECV_ID_EVENT_FILENAME: %lu\n", evt->uEventID); // Log unhandled request IDs
             break;
         }
         break;
@@ -571,6 +640,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             currentStatus();
             break;
         default:
+            printf("Unhandled state request ID: %lu\n", pState->dwRequestID); // Log unhandled request IDs
             break;
         }
         break;
@@ -579,7 +649,22 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     case SIMCONNECT_RECV_ID_EVENT:
     {
         SIMCONNECT_RECV_EVENT* evt = (SIMCONNECT_RECV_EVENT*)pData;
-        if (evt->uEventID == EVENT_SIM_PAUSE_EX1) { // Pause events
+
+        if (evt->uEventID == 0) { // What event is this?
+            switch (evt->dwData) {
+            case 65536:
+                printf("\n[EVENT] Sending message via TIP screen\n");
+                break;
+            case 65540:
+                printf("\n[EVENT] Message sent!\n");
+                break;
+            default:
+                printf("\n[EVENT] (default) Received dwData: %d\n", evt->dwData);
+                break;
+            }
+            break;
+        }
+        else if (evt->uEventID == EVENT_SIM_PAUSE_EX1) { // Pause events
             switch (evt->dwData) {
             case PAUSE_STATE_FLAG_OFF: {
 
@@ -609,27 +694,23 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 break;
             case PAUSE_STATE_FLAG_SIM_PAUSE: {
                 wasSoftPaused = TRUE; // Set it so than we simulation starts we know it came from a soft pause
-                if (!isFinalSave && !isOnMenuScreen && isFirstSave) {
+
+                // Check if we are in the menu screen before starting the flight by checking the following conditions
+                if (!isFinalSave && !isOnMenuScreen && isFirstSave && flightInitialized) {
                     isPauseBeforeStart = TRUE;
                     printf("\n[STATUS] Simulator is in Briefing screen before start (Press READY TO FLY)\n");
                     currentStatus();
-                }
-                else if(!isOnMenuScreen && !isFirstSave && isFinalSave) { // This is the case when we are in the sim and we press ESC
+                } // Same here... check all conditions OR if flight was never initilized we assume the app was started while already in the sim
+                else if((!isOnMenuScreen && !isFirstSave && isFinalSave) || !flightInitialized) { // This is the case when we are in the sim and we press ESC
+                    // Save the situation (without needing to press CTRL+ALT+S or ESC)
+                    SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_SITUATION_SAVE, 98, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
 
-                    printf("\n[STATUS] Will try to obtain our current position and GATE... (CurrentFlight is %s)\n", currentFlight.c_str());
-
-                    // Get our current position so we can determine the nearest airport
-                    hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION_ONCE, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
-                    if (hr != S_OK) {
-                        printf("\nFailed to obtain our position\n");
-                    }
-                    else {
-                        // Try to obtain ther closest airport to the user aircraft
-                        hr = SimConnect_RequestFacilitiesList_EX1(hSimConnect, SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT, REQUEST_CLOSEST_AIRPORT);
-                        if (hr != S_OK) {
-                            printf("\nFailed to obtain closest airport to our position\n");
-                        }
-                    }
+                    // Get the current position and the closest airport (including gate)
+                    SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_CLOSEST_AIRPORT, 0, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+				}
+                else {
+					printf("\n[PAUSE EX1] Simulator is paused\n");
+					currentStatus();
 				}
                 break;
             }
@@ -643,6 +724,24 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         else { // Other events
             switch (evt->uEventID)
             {
+            case EVENT_CLOSEST_AIRPORT: { // CTRL+ALT+P - Request current position, then request the closest airport and gate
+
+                printf("\n[STATUS] Will try to obtain our current position and GATE... (CurrentFlight is %s)\n", currentFlight.c_str());
+
+                // Get our current position so we can determine the nearest airport
+                hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION_ONCE, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
+                if (hr != S_OK) {
+                    printf("\nFailed to obtain our position\n");
+                }
+                else {
+                    // Try to obtain ther closest airport to the user aircraft
+                    hr = SimConnect_RequestFacilitiesList_EX1(hSimConnect, SIMCONNECT_FACILITY_LIST_TYPE_AIRPORT, REQUEST_CLOSEST_AIRPORT);
+                    if (hr != S_OK) {
+                        printf("\nFailed to obtain closest airport to our position\n");
+                    }
+                }
+                break;
+            }
             case EVENT_SITUATION_SAVE: { // CTRL+ALT+S or ESC triggered - Also for the automatic initial save (to set local ZULU time)
 
                 // Only the following Flights are allowed to be saved
@@ -651,7 +750,16 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                     if (evt->dwData == 99) { // INITIAL SAVE - Saves triggered by setZuluAndSave (we pass 99 as custom value)
                         firstSave();
                     }
-                    else if (evt->dwData == 0) { // NORMAL SAVE (CTRL+ALT+S or ESC triggered)
+                    else if (evt->dwData == 55) { // USER USER SAVE (CTRL+ALT+S triggered)
+                        finalSave();
+                        sendText(hSimConnect, "Saving, please wait...");
+                    }
+                    else if (evt->dwData == 98) { // NORMAL SAVE (ESC triggered)
+                        printf("\n[EVENT_SITUATION_SAVE] Final save before exiting.. please wait.\n");
+                        finalSave();
+                    }
+                    else if (evt->dwData == 0) { // NORMAL SAVE (ESC triggered)
+                        printf("\n[EVENT_SITUATION_SAVE] Final save triggered by pressing ESC key\n");
                         finalSave();
                     }
                     else { // Values for dwData other than 0 or 99 (not implemented yet)
@@ -727,6 +835,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 break;
             }
             default:
+                printf("Unhandled event ID for SIMCONNECT_RECV_ID_EVENT: %lu\n", evt->uEventID); // Log unhandled request IDs
                 break;
             }
             break;
@@ -751,7 +860,159 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     case SIMCONNECT_RECV_ID_EXCEPTION:
     {
         SIMCONNECT_RECV_EXCEPTION* except = (SIMCONNECT_RECV_EXCEPTION*)pData;
-        printf("Exception received: %d, SendID: %d, Index: %d (ID is %d)\n", except->dwException, except->dwSendID, except->dwIndex, except->dwID);
+
+        // Check if this is a jetway-related exception
+        if (except->dwException == SIMCONNECT_EXCEPTION_JETWAY_DATA) {
+            switch (except->dwIndex) {
+            case 1:
+                printf("Jetway data request failed: Incorrect ICAO or airport not spawned.\n");
+                break;
+            case 2:
+                printf("Jetway data request failed: Invalid parking index.\n");
+                break;
+            case 99:
+                printf("Jetway data request failed: Internal error. Too far from a Jetway perhaps?\n");
+                break;
+            default:
+                printf("Jetway data request failed: Unknown error.\n");
+                break;
+            }
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_DATA_ERROR) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_DATA_ERROR. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_LOAD_FLIGHTPLAN_FAILED) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_LOAD_FLIGHTPLAN_FAILED. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_WEATHER_UNABLE_TO_GET_OBSERVATION) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_WEATHER_UNABLE_TO_GET_OBSERVATION. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_WEATHER_UNABLE_TO_CREATE_STATION) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_WEATHER_UNABLE_TO_CREATE_STATION. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_WEATHER_UNABLE_TO_REMOVE_STATION) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_WEATHER_UNABLE_TO_REMOVE_STATION. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_INVALID_DATA_TYPE) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_INVALID_DATA_TYPE. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_INVALID_DATA_SIZE) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_INVALID_DATA_SIZE. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_INVALID_ARRAY) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_INVALID_ARRAY. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_CREATE_OBJECT_FAILED) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_CREATE_OBJECT_FAILED. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_OPERATION_INVALID_FOR_OBJECT_TYPE) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_OPERATION_INVALID_FOR_OBJECT_TYPE. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_ILLEGAL_OPERATION) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_ILLEGAL_OPERATION. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_ALREADY_SUBSCRIBED) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_ALREADY_SUBSCRIBED. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_INVALID_ENUM) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_INVALID_ENUM. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_DEFINITION_ERROR) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_DEFINITION_ERROR. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_DUPLICATE_ID) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_DUPLICATE_ID. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_DATUM_ID) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_DATUM_ID. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_OUT_OF_BOUNDS) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_OUT_OF_BOUNDS. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_ALREADY_CREATED) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_ALREADY_CREATED. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_OBJECT_OUTSIDE_REALITY_BUBBLE) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_OBJECT_OUTSIDE_REALITY_BUBBLE. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_OBJECT_CONTAINER) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_OBJECT_CONTAINER. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_OBJECT_AI) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_OBJECT_AI. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_OBJECT_ATC) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_OBJECT_ATC. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_OBJECT_SCHEDULE) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_OBJECT_SCHEDULE. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_ACTION_NOT_FOUND) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_ACTION_NOT_FOUND. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_NOT_AN_ACTION) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_NOT_AN_ACTION. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_INCORRECT_ACTION_PARAMS) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_INCORRECT_ACTION_PARAMS. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_GET_INPUT_EVENT_FAILED) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_GET_INPUT_EVENT_FAILED. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_SET_INPUT_EVENT_FAILED) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_SET_INPUT_EVENT_FAILED. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_TOO_MANY_GROUPS) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_TOO_MANY_GROUPS. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_NAME_UNRECOGNIZED) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_NAME_UNRECOGNIZED. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_TOO_MANY_EVENT_NAMES) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_TOO_MANY_EVENT_NAMES. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_EVENT_ID_DUPLICATE) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_EVENT_ID_DUPLICATE. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_TOO_MANY_MAPS) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_TOO_MANY_MAPS. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_TOO_MANY_OBJECTS) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_TOO_MANY_OBJECTS. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_TOO_MANY_REQUESTS) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_TOO_MANY_REQUESTS. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_WEATHER_INVALID_PORT) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_WEATHER_INVALID_PORT. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_WEATHER_INVALID_METAR) {
+			printf("Exception received for SIMCONNECT_EXCEPTION_WEATHER_INVALID_METAR. Debug here\n");
+		}
+        else if (except->dwException == SIMCONNECT_EXCEPTION_NONE) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_NONE. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_ERROR) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_ERROR. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_SIZE_MISMATCH) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_SIZE_MISMATCH. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_UNRECOGNIZED_ID) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_UNRECOGNIZED_ID. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_UNOPENED) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_UNOPENED. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_VERSION_MISMATCH) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_VERSION_MISMATCH. Debug here\n");
+        }
+        else if (except->dwException == SIMCONNECT_EXCEPTION_TOO_MANY_REQUESTS) {
+            printf("Exception received for SIMCONNECT_EXCEPTION_TOO_MANY_REQUESTS. Debug here\n");
+        }
+        else {
+            printf("Unknown exception received: %d, SendID: %d, Index: %d (ID is %d)\n", except->dwException, except->dwSendID, except->dwIndex, except->dwID);
+        }
         currentStatus();
         break;
     }
@@ -766,12 +1027,22 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     {
         SIMCONNECT_RECV_OPEN* openData = (SIMCONNECT_RECV_OPEN*)pData;
         printf("\n[SIMCONNECT] Connected to Flight Simulator! (%s Version %d.%d - Build %d)\n", openData->szApplicationName, openData->dwApplicationVersionMajor, openData->dwApplicationVersionMinor, openData->dwApplicationBuildMajor);
+
+        std::string customFlightmod = MSFSPath + "\\" + szFileName + ".FLT";
+        std::string lastMOD = MSFSPath + "\\LAST.FLT";
+
+        // Fix the MSFS bug when a connection is established
+        fixMSFSbug(customFlightmod); 
+        fixMSFSbug(lastMOD);
+
+        // Remove LocalVars from LAST.FLT and set the correct .FLT version
+        fixLASTflight(lastMOD);
+
         break;
     }
 
     default:
-        if(DEBUG)
-            printf("Unhandled data ID: %lu\n", pData->dwID); // Log unhandled data IDs
+        printf("Unhandled data ID: %lu\n", pData->dwID); // Log unhandled data IDs
         break;
     }
 }

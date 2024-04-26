@@ -35,6 +35,9 @@ extern const char* szDescription;
 
 extern double myLatitude;
 extern double myLongitude;
+extern double myAltitude;
+extern double myAirspeed;
+extern double isSimOnGround;
 
 extern std::string airportICAO;
 extern std::string airportName;
@@ -65,6 +68,7 @@ extern bool isFinalSave;
 extern bool isFirstSave;
 extern bool isPauseBeforeStart;
 extern bool userLoadedPLN;
+extern bool flightInitialized;
 extern DWORD isSimRunning;
 
 // Pause state flags
@@ -82,7 +86,7 @@ struct sJetways { int PARKING_GATE; int PARKING_SUFFIX; int PARKING_SPOT; };
 struct sTaxiParkings { int NAME; int SUFFIX; unsigned NUMBER; };
 struct GateInfo { std::string friendlyName; std::string gateString; };
 struct SimDayOfYear { double dayOfYear; };
-struct AircraftPosition { double latitude; double longitude; double altitude; };
+struct AircraftPosition { double latitude; double longitude; double altitude; double airspeed; double sim_on_ground; };
 struct CameraState { double state; };
 #pragma pack(pop)
 
@@ -131,4 +135,5 @@ enum EVENT_ID {
     EVENT_SIM_VIEW,
     EVENT_SIM_CRASHED,
     EVENT_SIM_CRASHRESET,
+    EVENT_CLOSEST_AIRPORT,
 };

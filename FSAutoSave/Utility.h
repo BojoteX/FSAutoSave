@@ -22,6 +22,7 @@ std::string GetVersionInfo(const std::string& info);
 void simStatus(bool running);
 void SafeCopyPath(const wchar_t* source);
 void fixMSFSbug(const std::string& filePath);
+void fixLASTflight(const std::string& filePath);
 void sendText(HANDLE hSimConnect, const std::string& text);
 void getFP();
 void deleteAllSavedSituations();
