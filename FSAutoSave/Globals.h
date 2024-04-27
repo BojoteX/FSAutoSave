@@ -18,6 +18,8 @@ extern bool DEBUG;
 extern bool minimizeOnStart;
 extern bool resetSaves;
 extern bool isBUGfixed;
+extern bool isSteam;
+extern bool isMSStore;
 
 extern int startCounter;
 extern int quit;

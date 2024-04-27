@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include <regex>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -104,13 +105,6 @@ ZuluTime getZuluTime() {
 // Define a map to hold different sets of files for RESETs which can be ONLY user initiated. Perfectly safe to use.
 std::map<std::string, std::vector<std::string>> fileSets = {
 
-    // Core set of files to be deleted
-    {"MSFS Situation Files", {
-        "Missions\\Custom\\CustomFlight\\CustomFlight.FLT",
-        "Missions\\Custom\\CustomFlight\\CustomFlight.PLN",
-        "Missions\\Custom\\CustomFlight\\CustomFlight.WX",
-        "Missions\\Custom\\CustomFlight\\CustomFlight.SPB",
-    }},
     // FSAutoSave generated files
     {"FSAutoSave generated Situation Files", {
         "LAST.FLT",
@@ -118,27 +112,34 @@ std::map<std::string, std::vector<std::string>> fileSets = {
         "LAST.WX",
         "LAST.SPB",
     }},
-    // Aircraft Addon files
-    {"PMDG 737-800", {
-        "Packages\\pmdg-aircraft-738\\work\\PanelState\\CustomFlight.sav",
-        "Packages\\pmdg-aircraft-738\\work\\PanelState\\CustomFlight.fmc",
-        "Packages\\pmdg-aircraft-738\\work\\PanelState\\LAST.sav",
-        "Packages\\pmdg-aircraft-738\\work\\PanelState\\LAST.fmc",
-    }},
-
     // Additional sets can be added here
 };
 
 // Function to delete all files from all sets or simulate the deletion process
 void deleteAllSavedSituations() {
-    printf("\n[RESET] Resetting all saved situations from %s\n", MSFSPath.c_str());
+	
+    std::string tmpPath;
+    if (isMSStore) {
+        // Regular expression for the pattern to be searched
+        std::regex pattern("LocalCache");
+        tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
+	}
+	else if (isSteam) {
+		tmpPath = MSFSPath;
+	}
+	else {
+		printf("MSFS directory not found.\n");
+		return;
+	}
+
+    printf("\n[RESET] Resetting all saved situations from %s\n", tmpPath.c_str());
     for (const auto& pair : fileSets) {
         const std::string& setName = pair.first;
         const auto& files = pair.second;
 
         printf("\n[RESET] Processing set: %s\n", setName.c_str());
         for (const auto& file : files) {
-            fs::path fullPath = fs::path(MSFSPath) / file;
+            fs::path fullPath = fs::path(tmpPath) / file;
             if (DEBUG) {
                 // In DEBUG mode, simulate the file deletion
                 if (fs::exists(fullPath)) {
@@ -219,20 +220,32 @@ std::string getMSFSdir() {
 
     // Paths for MS Store and DVD version
     std::string ms_store_dir = localAppData + "\\Packages\\Microsoft.FlightSimulator_8wekyb3d8bbwe\\LocalCache";
+
     // Path for Steam version
     std::string steam_dir = appData + "\\Microsoft Flight Simulator";
 
+    std::string fspath;
     // Check if the directories exist
     if (fs::exists(ms_store_dir)) {
-        return ms_store_dir;
+        fspath = ms_store_dir;
+        isMSStore = true;
     }
     else if (fs::exists(steam_dir)) {
-        return steam_dir;
+        fspath = steam_dir;
+        isSteam = true;
     }
     else {
         printf("MSFS directory not found.\n");
         return "";
     }
+
+	// Make sure only one version is installed
+	if (isSteam && isMSStore) {
+		printf("Both MS Store and Steam versions of MSFS are installed. Please uninstall one of them.\n");
+		return "";
+	}
+
+    return fspath;
 }
 
 std::string getCommunityPath(const std::string& user_cfg_path) {
@@ -508,8 +521,22 @@ void finalFLTchange() {
     // This will ALSO execute on the first run of the program to set the initial state of the .FLT files or when exiting a flight, so check for MAINMENU.FLT or empty string 
     // if you want to skip any of the conditions below 
 
-    std::string customFlightmod = MSFSPath + "\\" + szFileName + ".FLT";
-    std::string lastMOD = MSFSPath + "\\LAST.FLT";
+    std::string tmpPath;
+    if (isMSStore) {
+        // Regular expression for the pattern to be searched
+        std::regex pattern("LocalCache");
+        tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
+    }
+    else if (isSteam) {
+        tmpPath = MSFSPath;
+    }
+    else {
+        printf("MSFS directory not found.\n");
+        return;
+    }
+
+    std::string customFlightmod = tmpPath + "\\" + szFileName + ".FLT";
+    std::string lastMOD = tmpPath + "\\LAST.FLT";
 
     std::string flightVersion = readConfigFile(lastMOD, "Main", "FlightVersion"); // Autoincremented version of the flight
     if (flightVersion.empty() || flightVersion == "0") {
@@ -722,6 +749,9 @@ void saveNotAllowed() {
 }
 
 void saveAndSetZULU() {
+    
+    printf("\n[INFO] *** Attempting to save situation and set local ZULU time *** \n");
+
     if ((currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") && (!isFinalSave)) {
         if (!wasReset) {
 
@@ -755,6 +785,7 @@ void saveAndSetZULU() {
     else {
         // Handle cases where saves are not allowed
         if (!DEBUG) {
+            printf("\n[INFO] *** executing saveNotAllowed() *** \n");
             saveNotAllowed();
         }
         else {

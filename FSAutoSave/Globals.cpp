@@ -3,30 +3,32 @@
 #include "Globals.h"
 
 std::atomic<bool> isModifyingFile(false);
-SIMCONNECT_DATA_REQUEST_ID FACILITY_DATA_DEF_REQUEST_START = 100;
-unsigned g_RequestCount = 0;
-HANDLE hSimConnect = NULL;
-HANDLE g_hEvent;
-HRESULT hr;
+SIMCONNECT_DATA_REQUEST_ID FACILITY_DATA_DEF_REQUEST_START	= 100;
+unsigned g_RequestCount										= 0;
+HANDLE hSimConnect											= NULL;
+HANDLE g_hEvent												= NULL;
+HRESULT hr													= NULL;
 
-bool DEBUG = FALSE;
-bool minimizeOnStart = FALSE;
-bool resetSaves = FALSE;
-bool isBUGfixed = FALSE;
+bool DEBUG				= FALSE;
+bool minimizeOnStart	= FALSE;
+bool resetSaves			= FALSE;
+bool isBUGfixed			= FALSE;
+bool isSteam			= FALSE;
+bool isMSStore			= FALSE;
 
-int startCounter = 0;
-int quit = 0;
-int fpDisableCount = 0;
-int parkingIndex = 0;
-int countJetways = 0;
-int countTaxiParking = 0;
+int startCounter		= 0;
+int quit				= 0;
+int fpDisableCount		= 0;
+int parkingIndex		= 0;
+int countJetways		= 0;
+int countTaxiParking	= 0;
 
-const std::string DELETE_MARKER = "!DELETE!";
+const std::string DELETE_MARKER			= "!DELETE!";
 const std::string DELETE_SECTION_MARKER = "!DELETE_SECTION!";
 
-const char* szFileName = "Missions\\Custom\\CustomFlight\\CustomFlight";
-const char* szTitle = "FSAutoSave generated file";
-const char* szDescription = "This is a save of your last flight so you can resume exactly where you left.";
+const char* szFileName		= "Missions\\Custom\\CustomFlight\\CustomFlight";
+const char* szTitle			= "FSAutoSave generated file";
+const char* szDescription	= "This is a save of your last flight so you can resume exactly where you left.";
 
 double myLatitude	 = 0.0;
 double myLongitude	 = 0.0;

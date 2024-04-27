@@ -7,6 +7,7 @@
 
 #define NOMINMAX
 #include <windows.h>
+#include <regex>
 #include <thread>
 #include <map>
 #include <tchar.h>
@@ -360,8 +361,22 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             if (pCS->state == 12) { // 12 is the value for the "World Map" camera state
                 flightInitialized = TRUE;
 
-                std::string customFlightmod = MSFSPath + "\\" + szFileName + ".FLT";
-                std::string lastMOD = MSFSPath + "\\LAST.FLT";
+                std::string tmpPath;
+                if (isMSStore) {
+                    // Regular expression for the pattern to be searched
+                    std::regex pattern("LocalCache");
+                    tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
+                }
+                else if (isSteam) {
+                    tmpPath = MSFSPath;
+                }
+                else {
+                    printf("MSFS directory not found.\n");
+                    return;
+                }
+
+                std::string customFlightmod = tmpPath + "\\" + szFileName + ".FLT";
+                std::string lastMOD = tmpPath + "\\LAST.FLT";
 
                 // Fix the MSFS bug when entering the World Map
                 fixMSFSbug(customFlightmod); 
@@ -1032,8 +1047,22 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         SIMCONNECT_RECV_OPEN* openData = (SIMCONNECT_RECV_OPEN*)pData;
         printf("\n[SIMCONNECT] Connected to Flight Simulator! (%s Version %d.%d - Build %d)\n", openData->szApplicationName, openData->dwApplicationVersionMajor, openData->dwApplicationVersionMinor, openData->dwApplicationBuildMajor);
 
-        std::string customFlightmod = MSFSPath + "\\" + szFileName + ".FLT";
-        std::string lastMOD = MSFSPath + "\\LAST.FLT";
+        std::string tmpPath;
+        if (isMSStore) {
+            // Regular expression for the pattern to be searched
+            std::regex pattern("LocalCache");
+            tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
+        }
+        else if (isSteam) {
+            tmpPath = MSFSPath;
+        }
+        else {
+            printf("MSFS directory not found.\n");
+            return;
+        }
+
+        std::string customFlightmod = tmpPath + "\\" + szFileName + ".FLT";
+        std::string lastMOD = tmpPath + "\\LAST.FLT";
 
         // Fix the MSFS bug when a connection is established
         fixMSFSbug(customFlightmod); 
@@ -1139,8 +1168,26 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
 
     if (!MSFSPath.empty()) {  
 		printf("[INFO] MSFS is Installed locally.\n");
-        CommunityPath = getCommunityPath(MSFSPath + "\\UserCfg.opt");  // Assign directly to the global variable 
-        pathToMonitor = MSFSPath + "\\Missions\\Custom\\CustomFlight"; // Path to monitor CustomFlight.FLT changes done by MSFS
+
+        if(isSteam) {
+            CommunityPath = getCommunityPath(MSFSPath + "\\UserCfg.opt");  // Assign directly to the global variable 
+            pathToMonitor = MSFSPath + "\\Missions\\Custom\\CustomFlight"; // Path to monitor CustomFlight.FLT changes done by MSFS
+        }
+        else if(isMSStore) {
+            CommunityPath = getCommunityPath(MSFSPath + "\\UserCfg.opt");  // Assign directly to the global variable
+
+            std::string tmpPath;
+            // Regular expression for the pattern to be searched
+            std::regex pattern("LocalCache");
+            tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
+
+            pathToMonitor = tmpPath + "\\Missions\\Custom\\CustomFlight"; // Path to monitor CustomFlight.FLT changes done by MSFS
+        }
+		else {
+			printf("[ERROR] Could not determine if MSFS is Steam or MS Store. Will now exit\n");
+			waitForEnter();  // Ensure user presses Enter
+			return 0;
+		}
 
         if (!CommunityPath.empty()) {
 			printf("[INFO] Your MSFS Community Path is located at %s\n", CommunityPath.c_str());
