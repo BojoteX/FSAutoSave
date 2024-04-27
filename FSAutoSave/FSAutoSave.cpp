@@ -187,6 +187,8 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 GateInfo gateInfo = formatGateName(taxiparking->NAME);
                 GateInfo gateSuffixInfo = formatGateName(taxiparking->SUFFIX);
                 printf("Closest gate is %s %d (%s)\n", gateInfo.friendlyName.c_str(), taxiparking->NUMBER, gateInfo.gateString.c_str());
+                std::string gateString = "Closest Gate/Parking is " + gateInfo.friendlyName + " " + std::to_string(taxiparking->NUMBER);
+                sendText(hSimConnect, gateString);
                 parkingGate = gateInfo.gateString;
                 parkingGateSuffix = gateSuffixInfo.gateString;
                 parkingNumber = taxiparking->NUMBER;
@@ -374,8 +376,8 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 // Use GetFP to get the flight plan when we enter the World Map if using SimBrief
                 std::thread(getFP).detach(); // Spawn a new thread to get the flight plan so we don't block the main thread. It will be cleaned up automatically
 			}
-            else if (pCS->state == 11) { // 11 is used when first loading a flight
-                printf("\nInitializing sim...\n");
+            else if (pCS->state == 11) { // 11 is used when first loading or exiting a flight
+                // printf("\nInitializing sim...\n");
                 flightInitialized = TRUE;
             }
             else if (pCS->state == 15) { // 15 is used when in the menu screen
@@ -775,7 +777,9 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 printf("\n[EVENT_SITUATION_RELOAD] Current flight has been reloaded\n");
                 currentStatus();
                 wasReset = TRUE; // Set the flag so we know the sim was reset (RELOADED)
-                SimConnect_FlightLoad(hSimConnect, currentFlightPath.c_str());
+                SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN");
+                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+                SimConnect_FlightLoad(hSimConnect, "LAST.FLT");
                 break;
             }
             case EVENT_SITUATION_RESET: { // RIGHT CONTROL + r
