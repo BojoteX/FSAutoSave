@@ -2,7 +2,7 @@
 // FSAutoSave - A simple program to automatically save your last flight so you can resume exactly where you left.
 // 
 // CTRL+ALT+S  =  to save the current flight 
-//        ESC  =  to save the current flight.
+// CTRL+ALT+P  =  to request the closest GATE/Jetway
 // ---------------------------------------------------------
 
 #define NOMINMAX
@@ -47,7 +47,9 @@ void initApp() {
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE LATITUDE", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE LONGITUDE", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE ALTITUDE", "feet");
-    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "AIRSPEED TRUE", "knots");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "AIRSPEED INDICATED", "feet per second"); // Used for ZVelBodyAxis in [SimVars.0] to adjust speed to IAS
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "GROUND VELOCITY", "knots");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE HEADING DEGREES MAGNETIC", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "SIM ON GROUND", "Bool");
 
     // To determine where we are in the menus
@@ -157,7 +159,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         case SIMCONNECT_FACILITY_DATA_AIRPORT: {
             sAirport* airport = (sAirport*)&pFacilityData->Data;
 
-            printf("Airport name is %s (%s)\n", airport->name, airport->icao);
+            printf("Closest airport is %s (%s)\n", airport->name, airport->icao);
             airportName = std::string(airport->name);
             airportICAO = std::string(airport->icao);
             break;
@@ -184,15 +186,23 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         {
             sTaxiParkings* taxiparking = (sTaxiParkings*)&pFacilityData->Data;
 
-            if (countTaxiParking == parkingIndex && parkingIndex != NULL) {
+            if ((countTaxiParking == parkingIndex) && parkingIndex != NULL) {
                 GateInfo gateInfo = formatGateName(taxiparking->NAME);
                 GateInfo gateSuffixInfo = formatGateName(taxiparking->SUFFIX);
-                printf("Closest gate is %s %d (%s)\n", gateInfo.friendlyName.c_str(), taxiparking->NUMBER, gateInfo.gateString.c_str());
-                std::string gateString = "Closest Gate/Parking is " + gateInfo.friendlyName + " " + std::to_string(taxiparking->NUMBER);
+                int clockPos = calculateClockPosition(JetwayBearing, myHeading);
+                printf("Closest Jetway is %s %d\n", gateInfo.friendlyName.c_str(), taxiparking->NUMBER);
+                std::string gateString = "Closest Jetway is " + gateInfo.friendlyName + " " + std::to_string(taxiparking->NUMBER) + " at " + airportName + ". Distance from your aircraft is " + std::to_string(int(metersToFeet(JetwayDistance))) + " meters (" + std::to_string(int(JetwayDistance)) + " feet) at your " + std::to_string(clockPos) + " o'clock";
                 sendText(hSimConnect, gateString);
                 parkingGate = gateInfo.gateString;
                 parkingGateSuffix = gateSuffixInfo.gateString;
                 parkingNumber = taxiparking->NUMBER;
+
+                JetwayDistance = NULL;
+                JetwayBearing = NULL;
+
+                // After using the data, reset the values
+                taxiparking = nullptr;
+                parkingIndex = NULL;
             }
 
             countTaxiParking++;
@@ -233,10 +243,15 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
     case SIMCONNECT_RECV_ID_FACILITY_DATA_END: {
         SIMCONNECT_RECV_FACILITY_DATA_END* pFacilityData = (SIMCONNECT_RECV_FACILITY_DATA_END*)pData;
 
-        printf("RequestId %u have been processed succesfully\n", pFacilityData->RequestId);
+        // printf("Request ID %u have been processed succesfully, reset values\n", pFacilityData->RequestId);
 
+        // Reset the counters
         countJetways = 0;
         countTaxiParking = 0;
+
+        // Reset names after use
+        // airportName = "";
+        // airportICAO = "";
 
         break;
     }
@@ -247,25 +262,32 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         unsigned int count = static_cast<unsigned int>(pJetwayData->dwArraySize);
 
         if (count > 0) {
+
+
             double closestJetwayDistance = std::numeric_limits<double>::max();
+            double closestJetwayBearing  = std::numeric_limits<double>::max();
+
             SIMCONNECT_JETWAY_DATA* closestJetway = nullptr;
-            parkingIndex = 0;  // Initialize the parking index to 0
+            parkingIndex = NULL;  // Initialize the parking index to NULL as 0 is a valid index
 
-            for (unsigned int i = 0; i < count; ++i)
-            {
+            for (unsigned int i = 0; i < count; ++i) {
                 SIMCONNECT_JETWAY_DATA& jetway = pJetwayData->rgData[i];
-                std::cout << std::fixed << std::setprecision(6); // Set precision for float
-
-                double distance = sqrt(pow(jetway.Lla.Latitude - myLatitude, 2) + pow(jetway.Lla.Longitude - myLongitude, 2));
-                if (distance < closestJetwayDistance) {
-                    closestJetwayDistance = distance;
+                DistanceAndBearing result = calculateDistanceAndBearing(myLatitude, myLongitude, jetway.Lla.Latitude, jetway.Lla.Longitude);
+                if (result.distance < closestJetwayDistance) {
+                    closestJetwayDistance   = result.distance;
+                    closestJetwayBearing    = result.bearing;
                     closestJetway = &jetway;
                 }
             }
-
+  
             if (closestJetway) {
                 parkingIndex = closestJetway->ParkingIndex;
+                int clockPos = calculateClockPosition(closestJetwayBearing, myHeading);
+                // printf("Closest Jetway is %.0f feet away (%.0f meters) bearing %.0f degrees (your %d o'clock)\n", metersToFeet(closestJetwayDistance), closestJetwayDistance, closestJetwayBearing, clockPos);
+                JetwayDistance = closestJetwayDistance;
+                JetwayBearing = closestJetwayBearing;
             }
+
         }
         else {
             printf("No Jetways found\n");
@@ -290,58 +312,55 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         break;
     }
 
-    case SIMCONNECT_RECV_ID_AIRPORT_LIST: { // DEFINITION_POSITION_DATA - Requested once
+    case SIMCONNECT_RECV_ID_AIRPORT_LIST: {
         SIMCONNECT_RECV_AIRPORT_LIST* pAirList = (SIMCONNECT_RECV_AIRPORT_LIST*)pData;
-
-        // Initialize or reset the closest airport details
-        char closestAirportIdent[8] = ""; // Assuming Ident length from the SDK
-        double closestDistance = DBL_MAX;   // Include float.h for DBL_MAX
-        BOOL recordFound = FALSE;
+        char closestAirportIdent[8] = "";
+        double closestDistance = DBL_MAX;
 
         if (pAirList->dwArraySize > 0) {
             SIMCONNECT_DATA_FACILITY_AIRPORT* airports = (SIMCONNECT_DATA_FACILITY_AIRPORT*)(pAirList + 1);
             for (DWORD i = 0; i < pAirList->dwArraySize; ++i) {
-                if (airports[i].Ident[0] != '\0' && airports[i].Latitude != 0.0 && airports[i].Longitude != 0.0) {
-                    recordFound = TRUE;
-                    double distance = sqrt(pow(airports[i].Latitude - myLatitude, 2) + pow(airports[i].Longitude - myLongitude, 2));
-                    if (distance < closestDistance) {
-                        closestDistance = distance;
-                        strncpy_s(closestAirportIdent, sizeof(closestAirportIdent), airports[i].Ident, _TRUNCATE); // Safe copy using strncpy_s
+                if (airports[i].Ident[0] != '\0') {
+                    double distanceSquared = pow(airports[i].Latitude - myLatitude, 2) + pow(airports[i].Longitude - myLongitude, 2);
+                    if (distanceSquared < closestDistance) {
+                        closestDistance = distanceSquared;
+                        strncpy_s(closestAirportIdent, sizeof(closestAirportIdent), airports[i].Ident, _TRUNCATE);
                     }
                 }
             }
 
-            if (recordFound && closestAirportIdent[0] != '\0') {
-                printf("Closest airport Ident: %s\n", closestAirportIdent);
+            if (closestAirportIdent[0] != '\0') {
+                // printf("Closest airport ICAO: %s\n", closestAirportIdent);
 
                 if (isSimOnGround) {
-                    printf("You are currently on the ground\n");
-                    hr = SimConnect_RequestJetwayData(hSimConnect, closestAirportIdent, 0, nullptr);
-                    if (hr != S_OK) {
-                        printf("Failed to request jetway data\n");
-                    }
-
-                    hr = SimConnect_RequestFacilityData(hSimConnect, DEFINITION_FACILITY_AIRPORT, FACILITY_DATA_DEF_REQUEST_START + g_RequestCount, closestAirportIdent);
-                    if (hr == S_OK) {
-                        g_RequestCount++; // Increase the request count to make the REQUEST ID unique
-                    }
-                    else {
-                        printf("\nFailed to obtain airport name\n");
-                    }
+                    // Request data only if on the ground
+                    handleGroundOperations(closestAirportIdent); // Request Jetway data
                 }
                 else {
-					printf("You are currently in the air. Not Jetway/Gate data available.\n");
-				}
+                    printf("You are currently in the air. Not Jetway/Gate data available.\n");
+                }
+
+                // Reset names before calling FACILITY DATA. If the request fails, we will have empty strings
+                airportName = "";
+                airportICAO = "";
+
+                // This should be somewhere else... need to investigate DEBUG THIS
+                hr = SimConnect_RequestFacilityData(hSimConnect, DEFINITION_FACILITY_AIRPORT, FACILITY_DATA_DEF_REQUEST_START + g_RequestCount, closestAirportIdent);
+                if (hr == S_OK) {
+                    g_RequestCount++;
+                }
+                else {
+                    printf("Failed to obtain airport name\n");
+                }
+
             }
             else {
                 printf("No airports found. Check cache\n");
             }
-
         }
         else {
-            printf("No airport data received. You are literally in the middle of nowhere ;)\n");
+            printf("No airport data received. You are literally in the middle of nowhere (or in the menu screen)\n");
         }
-
         break;
     }
 
@@ -358,41 +377,33 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         case REQUEST_CAMERA_STATE:
         {
             CameraState* pCS = (CameraState*)&pObjData->dwData;
+
+            // printf("\nCamera state is %0.f\n", pCS->state);
+
             if (pCS->state == 12) { // 12 is the value for the "World Map" camera state
                 flightInitialized = TRUE;
-
-                std::string tmpPath;
-                if (isMSStore) {
-                    // Regular expression for the pattern to be searched
-                    std::regex pattern("LocalCache");
-                    tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
-                }
-                else if (isSteam) {
-                    tmpPath = MSFSPath;
-                }
-                else {
-                    printf("MSFS directory not found.\n");
-                    return;
-                }
-
-                std::string customFlightmod = tmpPath + "\\" + szFileName + ".FLT";
-                std::string lastMOD = tmpPath + "\\LAST.FLT";
 
                 // Fix the MSFS bug when entering the World Map
                 fixMSFSbug(customFlightmod); 
                 fixMSFSbug(lastMOD); 
 
-                // Remove LocalVars from LAST.FLT and set the correct .FLT version
-                fixLASTflight(lastMOD); 
+                // Remove [LocalVars.0] section from LAST.FLT
+                // fixLASTflight(lastMOD); 
 
                 fpDisableCount = 0; // Reset the counter
                 userLoadedPLN = FALSE;
+
+                printf("\nLoading World Map...\n");
 
                 // Use GetFP to get the flight plan when we enter the World Map if using SimBrief
                 std::thread(getFP).detach(); // Spawn a new thread to get the flight plan so we don't block the main thread. It will be cleaned up automatically
 			}
             else if (pCS->state == 11) { // 11 is used when first loading or exiting a flight
-                // printf("\nInitializing sim...\n");
+
+                if (!flightInitialized) {
+                    // printf("\nEntering main menu...\n");
+				}
+
                 flightInitialized = TRUE;
             }
             else if (pCS->state == 15) { // 15 is used when in the menu screen
@@ -407,7 +418,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 flightInitialized = FALSE;
                 // Check if pObjData and pCS pointers are valid
                 if (pObjData && pCS) {
-                    printf("Camera state is %0.f\n", pCS->state);
+                    // printf("Camera state is %0.f\n", pCS->state);
                 }
                 else {
                     printf("Invalid data pointer(s). Unable to retrieve camera state.\n");
@@ -426,7 +437,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 				printf("Aircraft Position: Not available or in Main Menu\n");
 			}
             else {
-                printf("Latitude: %f - Longitude: %f - Altitude: %.0f feet - Airspeed: %.0f knots - isOnGround: %.0f\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed, pS->sim_on_ground);
+                printf("Latitude: %f - Longitude: %f - Altitude: %.0f feet - Ground Speed: %.0f knots - Heading: %.0f degrees - isOnGround: %.0f\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed, pS->mag_heading, pS->sim_on_ground);
             }
             break;
         }
@@ -438,7 +449,9 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             myLatitude      = pS->latitude;
             myLongitude     = pS->longitude;
             myAltitude      = pS->altitude;
+            myIASinFPS	    = pS->IASinFPS;
             myAirspeed      = pS->airspeed;
+            myHeading       = pS->mag_heading;
             isSimOnGround   = pS->sim_on_ground;
 
             int lat_int = static_cast<int>(pS->latitude);
@@ -449,15 +462,15 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             }
             else {
                 if (pS->sim_on_ground) {
-                    if (pS->airspeed == 0) {
-                        printf("Currently parked at Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+                    if (pS->airspeed < 1) {
+                        printf("Currently parked/stopped at Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
                     }
                     else {
-                        printf("On the ground, moving at %.0f knots. Current position is Latitude: %f - Longitude: %f\n", pS->airspeed, pS->latitude, pS->longitude);
+                        printf("On the ground, moving at %.0f knots. Heading: %.0f degrees. Current position is Latitude: %f - Longitude: %f\n", pS->airspeed, pS->mag_heading, pS->latitude, pS->longitude);
                     }
                 }
                 else {
-                    printf("Current position is Latitude: %f - Longitude: %f - Altitude: %.0f feet - Airspeed: %.0f knots.\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed);
+                    printf("Current position is Latitude: %f - Longitude: %f - Altitude: %.0f feet - Ground Speed: %.0f knots - Heading: %.0f degrees\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed, pS->mag_heading);
  
                 }
             }
@@ -525,11 +538,14 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             currentSaveFlight = NormalizePath(evt->szFileName);
             currentSaveFlightPath = evt->szFileName;
 
-            if (currentSaveFlight != "") {
-                printf("\n[SITUATION EVENT] Flight Saved: %s\n", currentSaveFlight.c_str());
+            if (currentSaveFlight.empty()) {
+                printf("\n[SITUATION EVENT] No flight saved\n");
+            }
+            else if (currentSaveFlight == "ACTIVITIES.FLT") {
+                printf("\n[SITUATION EVENT] Flight %s Saved to %s \n", currentSaveFlight.c_str(), currentSaveFlightPath.c_str());
             }
             else {
-                printf("\n[SITUATION EVENT] No flight saved\n");
+                printf("\n[SITUATION EVENT] Flight Saved: %s\n", currentSaveFlight.c_str());
             }
 
             currentStatus();
@@ -548,7 +564,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                     userLoadedPLN = TRUE;
 
                     if(fpDisableCount)
-                        printf("\n[INFO] Before this activation (%d) DEACTIVATIONS ocurred. Will reset counter.\n", fpDisableCount);
+                        // printf("\n[INFO] Before this activation (%d) DEACTIVATIONS ocurred. Will reset counter.\n", fpDisableCount);
                     
                     fpDisableCount = 0; // Reset the counter
                 }
@@ -670,13 +686,13 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         if (evt->uEventID == 0) { // What event is this?
             switch (evt->dwData) {
             case 65536:
-                printf("\n[EVENT] Sending message via TIP screen\n");
+                // printf("\n[EVENT] Sending message via TIP screen\n");
                 break;
             case 65540:
-                printf("\n[EVENT] Message sent!\n");
+                // printf("\n[EVENT] Message sent!\n");
                 break;
             default:
-                printf("\n[EVENT] (default) Received dwData: %d\n", evt->dwData);
+                // printf("\n[EVENT] (default) Received dwData: %d\n", evt->dwData);
                 break;
             }
             break;
@@ -743,7 +759,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             {
             case EVENT_CLOSEST_AIRPORT: { // CTRL+ALT+P - Request current position, then request the closest airport and gate
 
-                printf("\n[STATUS] Will try to obtain our current position and GATE... (CurrentFlight is %s)\n", currentFlight.c_str());
+                printf("\n[STATUS] Will try to obtain our current position and GATE...\n");
 
                 // Get our current position so we can determine the nearest airport
                 hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION_ONCE, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
@@ -792,9 +808,6 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 printf("\n[EVENT_SITUATION_RELOAD] Current flight has been reloaded\n");
                 currentStatus();
                 wasReset = TRUE; // Set the flag so we know the sim was reset (RELOADED)
-                SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN");
-                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-                SimConnect_FlightLoad(hSimConnect, "LAST.FLT");
                 break;
             }
             case EVENT_SITUATION_RESET: { // RIGHT CONTROL + r
@@ -841,16 +854,27 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                     // printf("\n[EVENT_SIM_VIEW] Exiting Main Menu\n");
                 }
                 else {
-                    printf("\n[EVENT_SIM_VIEW] Changed views\n");
+                    // printf("\n[EVENT_SIM_VIEW] Changed views\n");
                 }
                 break;
             }
             case EVENT_SIM_CRASHED: {
-				printf("\n[EVENT_SIM_CRASHED] Aircraft Crashed\n");
+				printf("\n[EVENT_SIM_CRASHED] Aircraft Crashed, will reload your flight on your last SAVE\n");
+
+                hr = SimConnect_FlightLoad(hSimConnect, currentFlightPath.c_str());
+                if (hr != S_OK) {
+					printf("\nFailed to reload the flight\n");
+				}
+                else {
+					printf("\nFlight has been reloaded\n");
+				}
+
+                aircraftCrashed = TRUE;
 				break;
 			}
             case EVENT_SIM_CRASHRESET: {
 				printf("\n[EVENT_SIM_CRASHRESET] Aircraft Crashed and Reset\n");
+                aircraftCrashed = TRUE;
                 break;
             }
             default:
@@ -1047,29 +1071,12 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         SIMCONNECT_RECV_OPEN* openData = (SIMCONNECT_RECV_OPEN*)pData;
         printf("\n[SIMCONNECT] Connected to Flight Simulator! (%s Version %d.%d - Build %d)\n", openData->szApplicationName, openData->dwApplicationVersionMajor, openData->dwApplicationVersionMinor, openData->dwApplicationBuildMajor);
 
-        std::string tmpPath;
-        if (isMSStore) {
-            // Regular expression for the pattern to be searched
-            std::regex pattern("LocalCache");
-            tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
-        }
-        else if (isSteam) {
-            tmpPath = MSFSPath;
-        }
-        else {
-            printf("MSFS directory not found.\n");
-            return;
-        }
-
-        std::string customFlightmod = tmpPath + "\\" + szFileName + ".FLT";
-        std::string lastMOD = tmpPath + "\\LAST.FLT";
-
         // Fix the MSFS bug when a connection is established
-        fixMSFSbug(customFlightmod); 
-        fixMSFSbug(lastMOD);
+        // fixMSFSbug(customFlightmod); 
+        // fixMSFSbug(lastMOD);
 
-        // Remove LocalVars from LAST.FLT and set the correct .FLT version
-        fixLASTflight(lastMOD);
+        // Remove [LocalVars.0] section from LAST.FLT
+        // fixLASTflight(lastMOD);
 
         break;
     }
@@ -1123,17 +1130,24 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
     std::string productName = GetVersionInfo("ProductName");
     std::string productVersion = GetVersionInfo("ProductVersion");
 
+    if (!enableANSI()) {
+        printf("ANSI color is not supported.\n");
+    }
+    else {
+
+        // Set console output to UTF-8
+        SetConsoleOutputCP(CP_UTF8);
+
+        // Ensure the console can handle Unicode characters
+        SetConsoleCP(CP_UTF8);
+
+        // Set the default console text color to bright white
+        printf("\033[97m");
+
+    }
+
     // Print the startup banner.
-    printf(
-        "\n%s v%s - %s\n"
-        "%s by %s\n"
-        "\n",
-        productName.c_str(),
-        productVersion.c_str(),
-        fileDescription.c_str(),
-        legalCopyright.c_str(),
-        companyName.c_str()
-    );
+    printf("\033[36m\n%s v%s - %s\n%s by %s\n\033[0m", productName.c_str(), productVersion.c_str(), fileDescription.c_str(), legalCopyright.c_str(), companyName.c_str());
 
     // Parse command line arguments
     for (int i = 1; i < argc; ++i) {
@@ -1154,6 +1168,11 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
         if (wcsncmp(argv[i], L"-SIMBRIEF:", 10) == 0) {
             SafeCopyPath(argv[i] + 10);  // Skip the "-SIMBRIEF:" (10 chars) part and copy the rest (the path) to the global variable GetFPpath
         }
+        if (_tcsncmp(argv[i], _T("-FFSTATE:"), 9) == 0) {
+            // Set the firstFlightState based on the argument provided
+            firstFlightState = WideCharToUTF8(argv[i] + 9); // Convert from TCHAR* to std::string
+            printf("Using %s as FirstFlightState in [FreeFlight]\n", firstFlightState.c_str());
+        }
     }
 
     MSFSPath = getMSFSdir();
@@ -1167,7 +1186,7 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
     }
 
     if (!MSFSPath.empty()) {  
-		printf("[INFO] MSFS is Installed locally.\n");
+		// printf("[INFO] MSFS is Installed locally.\n");
 
         if(isSteam) {
             CommunityPath = getCommunityPath(MSFSPath + "\\UserCfg.opt");  // Assign directly to the global variable 
@@ -1175,22 +1194,16 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
         }
         else if(isMSStore) {
             CommunityPath = getCommunityPath(MSFSPath + "\\UserCfg.opt");  // Assign directly to the global variable
-
-            std::string tmpPath;
-            // Regular expression for the pattern to be searched
-            std::regex pattern("LocalCache");
-            tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
-
-            pathToMonitor = tmpPath + "\\Missions\\Custom\\CustomFlight"; // Path to monitor CustomFlight.FLT changes done by MSFS
+            pathToMonitor = localStatePath + "\\Missions\\Custom\\CustomFlight"; // Path to monitor CustomFlight.FLT changes done by MSFS
         }
 		else {
-			printf("[ERROR] Could not determine if MSFS is Steam or MS Store. Will now exit\n");
+			printf("[ERROR] Could not determine if MSFS is Steam or MS Store version. Only one version needs to be installed for FSAutoSave to function. Will now exit\n");
 			waitForEnter();  // Ensure user presses Enter
 			return 0;
 		}
 
         if (!CommunityPath.empty()) {
-			printf("[INFO] Your MSFS Community Path is located at %s\n", CommunityPath.c_str());
+			// printf("[INFO] Your MSFS Community Path is located at %s\n", CommunityPath.c_str());
 		}
         else {
 			printf("[ERROR] Your UserCfg.opt is corrupted. A Community Path could not be found. Will now exit\n");
@@ -1213,9 +1226,7 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
             return 0;
         }
         else {
-            printf("[INFO] MSFS NOT Installed locally, FSAutoSave will NOT run over the network. Will now exit\n");
-            waitForEnter();  // Ensure user presses Enter
-            return 0;
+            printf("[INFO] MSFS is NOT Installed locally, FSAutoSave will RUN over the network, but WILL NOT be able to FIX some of the MSFS Save system bugs.\n");
         }
     }
 
@@ -1225,22 +1236,6 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
         if (hWnd != NULL) {
             ShowWindow(hWnd, SW_MINIMIZE);
         }
-    }
-
-    if (!enableANSI()) {
-        printf("ANSI color is not supported.\n");
-    }
-    else {
-
-        // Set console output to UTF-8
-        SetConsoleOutputCP(CP_UTF8);
-
-        // Ensure the console can handle Unicode characters
-        SetConsoleCP(CP_UTF8);
-
-        // Set the default console text color to bright white
-        printf("\033[97m");
-
     }
 
     // Try to create a named mutex.

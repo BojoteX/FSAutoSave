@@ -18,6 +18,7 @@ extern bool DEBUG;
 extern bool minimizeOnStart;
 extern bool resetSaves;
 extern bool isBUGfixed;
+extern bool isBUGfixedCustom;
 extern bool isSteam;
 extern bool isMSStore;
 
@@ -38,8 +39,12 @@ extern const char* szDescription;
 extern double myLatitude;
 extern double myLongitude;
 extern double myAltitude;
+extern double myIASinFPS;
 extern double myAirspeed;
+extern double myHeading;
 extern double isSimOnGround;
+extern double JetwayDistance;
+extern double JetwayBearing;
 
 extern std::string airportICAO;
 extern std::string airportName;
@@ -57,10 +62,17 @@ extern std::string currentFlightPath;
 extern std::string MSFSPath;
 extern std::string CommunityPath;
 extern std::string pathToMonitor;
+extern std::string localStatePath;
+extern std::string customFlightmod;
+extern std::string lastMOD;
+extern std::string localStatePath;
+
 extern wchar_t GetFPpath[1024];
 
 extern std::string enableAirportLife;
+extern std::string firstFlightState;
 
+extern bool aircraftCrashed;
 extern bool isOnMenuScreen;
 extern bool isFlightPlanActive;
 extern bool wasReset;
@@ -88,8 +100,9 @@ struct sJetways { int PARKING_GATE; int PARKING_SUFFIX; int PARKING_SPOT; };
 struct sTaxiParkings { int NAME; int SUFFIX; unsigned NUMBER; };
 struct GateInfo { std::string friendlyName; std::string gateString; };
 struct SimDayOfYear { double dayOfYear; };
-struct AircraftPosition { double latitude; double longitude; double altitude; double airspeed; double sim_on_ground; };
+struct AircraftPosition { double latitude; double longitude; double altitude; double IASinFPS; double airspeed; double mag_heading; double sim_on_ground; };
 struct CameraState { double state; };
+
 #pragma pack(pop)
 
 enum INPUT_ID { INPUT0 };

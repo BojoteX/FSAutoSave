@@ -28,6 +28,28 @@ bool enableANSI() {
     return true;
 }
 
+std::string WideCharToUTF8(const wchar_t* wideChars) {
+    if (!wideChars) return ""; // Safety check
+
+    // Calculate the required buffer size for the target multi-byte string
+    int bufferSize = WideCharToMultiByte(CP_UTF8, 0, wideChars, -1, nullptr, 0, nullptr, nullptr);
+    if (bufferSize == 0) {
+        // Handle the error, possibly with GetLastError()
+        return "";
+    }
+
+    std::string utf8String(bufferSize - 1, 0); // Allocate string with required buffer size minus null terminator
+    WideCharToMultiByte(CP_UTF8, 0, wideChars, -1, &utf8String[0], bufferSize, nullptr, nullptr);
+
+    return utf8String;
+}
+
+void copyFile(const std::string& source, const std::string& destination) {
+    std::ifstream src(source, std::ios::binary);
+    std::ofstream dest(destination, std::ios::binary);
+    dest << src.rdbuf();
+}
+
 void SafeCopyPath(const wchar_t* source) {
     errno_t err = wcscpy_s(GetFPpath, _countof(GetFPpath), source);
     if (err != 0) {
@@ -117,29 +139,15 @@ std::map<std::string, std::vector<std::string>> fileSets = {
 
 // Function to delete all files from all sets or simulate the deletion process
 void deleteAllSavedSituations() {
-	
-    std::string tmpPath;
-    if (isMSStore) {
-        // Regular expression for the pattern to be searched
-        std::regex pattern("LocalCache");
-        tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
-	}
-	else if (isSteam) {
-		tmpPath = MSFSPath;
-	}
-	else {
-		printf("MSFS directory not found.\n");
-		return;
-	}
 
-    printf("\n[RESET] Resetting all saved situations from %s\n", tmpPath.c_str());
+    printf("\n[RESET] Deleting your LAST flight files from %s\n", localStatePath.c_str());
     for (const auto& pair : fileSets) {
         const std::string& setName = pair.first;
         const auto& files = pair.second;
 
         printf("\n[RESET] Processing set: %s\n", setName.c_str());
         for (const auto& file : files) {
-            fs::path fullPath = fs::path(tmpPath) / file;
+            fs::path fullPath = fs::path(localStatePath) / file;
             if (DEBUG) {
                 // In DEBUG mode, simulate the file deletion
                 if (fs::exists(fullPath)) {
@@ -229,10 +237,14 @@ std::string getMSFSdir() {
     if (fs::exists(ms_store_dir)) {
         fspath = ms_store_dir;
         isMSStore = true;
+        // Regular expression for the pattern to be searched
+        std::regex pattern("LocalCache");
+        localStatePath = std::regex_replace(fspath, pattern, "LocalState");
     }
     else if (fs::exists(steam_dir)) {
         fspath = steam_dir;
         isSteam = true;
+        localStatePath = fspath;
     }
     else {
         printf("MSFS directory not found.\n");
@@ -244,6 +256,10 @@ std::string getMSFSdir() {
 		printf("Both MS Store and Steam versions of MSFS are installed. Please uninstall one of them.\n");
 		return "";
 	}
+
+    // Set lastMOD and customFlightmod based on the installation type above
+    customFlightmod = localStatePath + "\\" + szFileName + ".FLT";
+    lastMOD         = localStatePath + "\\LAST.FLT";
 
     return fspath;
 }
@@ -433,21 +449,21 @@ std::string modifyConfigFile(const std::string& filePath, const std::map<std::st
 }
 
 void fixLASTflight(const std::string& filePath) {
-    // Check if the last flight state is set to LANDING_GATE or WAITING and FIX it. Also we change PREFLIGHT_TAXI to PREFLIGHT_GATE for consistency 
+    // Removes the LocalVars section entirely 
+
+    printf("\n[INFO] Temporarily disabled removing [LocalVars.0] from LAST.FLT\n");
+    return;
 
     std::string MODfile = filePath;
 
     if (!DEBUG) {
         std::map<std::string, std::map<std::string, std::string>> fixLAST = {
             {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
-            {"Main", {
-                {"AppVersion", "10.0.61355" },
-            }},
         };
         std::string applyFIX = modifyConfigFile(MODfile, fixLAST);
         MODfile = NormalizePath(MODfile);
         if (!applyFIX.empty()) {
-            printf("\n[FIX] Checking LAST.FLT for errors\n");
+            printf("\n[FIX] Removed [LocalVars.0] section from LAST.FLT\n");
         }
         else {
             printf("\n[ERROR] ********* [ %s READ OK, BUT FAILED TO FIX BUG ] *********\n", MODfile.c_str());
@@ -463,34 +479,65 @@ void fixLASTflight(const std::string& filePath) {
 }
 
 void fixMSFSbug(const std::string& filePath) {
-    // Check if the last flight state is set to LANDING_GATE or WAITING and FIX it. Also we change PREFLIGHT_TAXI to PREFLIGHT_GATE for consistency 
+    // Check if the last flight state is set to LANDING_TAXI or LANDING_GATE and FIX it. Also we change PREFLIGHT_TAXI to firstFlightState* for consistency 
 
     std::string MODfile = filePath;
     std::string ffSTATE;
 
     ffSTATE = readConfigFile(MODfile, "FreeFlight", "FirstFlightState");
-    if (!ffSTATE.empty()) {
-        if (!DEBUG) {
-            if (ffSTATE == "LANDING_TAXI" || ffSTATE == "LANDING_GATE" || ffSTATE == "WAITING") {
-                std::map<std::string, std::map<std::string, std::string>> fixState = {
-                    {"FreeFlight", {{"FirstFlightState", "PREFLIGHT_GATE"}} }, // Change the FirstFlightState to PREFLIGHT_GATE to avoid the MSFS bug/crash
+    if (!DEBUG) {
+        if (ffSTATE == "LANDING_TAXI" || ffSTATE == "LANDING_GATE" || ffSTATE == "PREFLIGHT_PUSHBACK" || ffSTATE.empty() ) {
+            std::map<std::string, std::map<std::string, std::string>> fixState;
+
+            if (ffSTATE == "PREFLIGHT_PUSHBACK") { // If the FirstFlightState is set to PREFLIGHT_PUSHBACK
+                fixState = {
+                    {"FreeFlight", {{"FirstFlightState", firstFlightState}} }, // Change the FirstFlightState to firstFlightState* to avoid the MSFS bug/crash
+                };
+            }
+            else if (ffSTATE == "LANDING_TAXI" || ffSTATE == "LANDING_GATE") { // If the FirstFlightState is set to LANDING_TAXI or LANDING_GATE
+                fixState = {
+                    {"Arrival", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
+                    {"FreeFlight", {{"FirstFlightState", firstFlightState}} }, // Change the FirstFlightState to firstFlightState* to avoid the MSFS bug/crash
                     {"Main", {{"OriginalFlight", ""}} },
                 };
-                std::string applyFIX = modifyConfigFile(MODfile, fixState);
-                MODfile = NormalizePath(MODfile);
-                if (!applyFIX.empty()) {
-                    printf("\n[FIX] Replacing %s with %s in %s\n", ffSTATE.c_str(), "PREFLIGHT_GATE", MODfile.c_str());
-                    isBUGfixed = TRUE;
+            }
+            else { // If the FirstFlightState is empty
+                fixState = {
+					{"FreeFlight", {{"FirstFlightState", firstFlightState}} }, // Change the FirstFlightState to firstFlightState* to avoid the MSFS bug/crash
+				};
+			}
+
+            std::string applyFIX = modifyConfigFile(MODfile, fixState);
+            MODfile = NormalizePath(MODfile);
+            if (!applyFIX.empty()) {
+
+                if (ffSTATE.empty()) {
+                    printf("\n[FIX] FirstFlightState was empty, setting it to %s in %s\n", firstFlightState.c_str(), MODfile.c_str());
                 }
                 else {
-                    printf("\n[ERROR] ********* [ %s READ OK, BUT FAILED TO FIX BUG ] *********\n", MODfile.c_str());
+                    printf("\n[FIX] Replacing %s with %s in %s\n", ffSTATE.c_str(), firstFlightState.c_str(), MODfile.c_str());
                 }
+
+                if (MODfile == "LAST.FLT" && isFinalSave) {
+                    isBUGfixed = TRUE;
+                    printf("Setting isBUGfixed to TRUE\n");
+				}
+				else if (MODfile == "CUSTOMFLIGHT.FLT" && isFinalSave) {
+					isBUGfixedCustom = TRUE;
+                    printf("Setting isBUGfixedCustom to TRUE\n");
+				}
+                else {
+					printf("NOT setting isBUGfixed or isBUGfixedCustom, this was fixed in the World Map\n");
+				}
             }
-            return;
+            else {
+                printf("\n[ERROR] ********* [ %s READ OK, BUT FAILED TO FIX BUG ] *********\n", MODfile.c_str());
+            }
         }
-        else {
-            printf("\n[DEBUG] ********* [ %s READ OK, FirstFlightState: %s - NO modifications were made as we are in DEBUG mode ] *********\n", MODfile.c_str(), ffSTATE.c_str());
-        }
+        return;
+    }
+    else {
+        printf("\n[DEBUG] ********* [ %s READ OK, FirstFlightState: %s - NO modifications were made as we are in DEBUG mode ] *********\n", MODfile.c_str(), ffSTATE.c_str());
     }
     MODfile = NormalizePath(MODfile);
     printf("\n[ERROR] ********* [ FAILED TO READ %s ] *********\n", MODfile.c_str());
@@ -521,22 +568,8 @@ void finalFLTchange() {
     // This will ALSO execute on the first run of the program to set the initial state of the .FLT files or when exiting a flight, so check for MAINMENU.FLT or empty string 
     // if you want to skip any of the conditions below 
 
-    std::string tmpPath;
-    if (isMSStore) {
-        // Regular expression for the pattern to be searched
-        std::regex pattern("LocalCache");
-        tmpPath = std::regex_replace(MSFSPath, pattern, "LocalState");
-    }
-    else if (isSteam) {
-        tmpPath = MSFSPath;
-    }
-    else {
-        printf("MSFS directory not found.\n");
-        return;
-    }
-
-    std::string customFlightmod = tmpPath + "\\" + szFileName + ".FLT";
-    std::string lastMOD = tmpPath + "\\LAST.FLT";
+    std::string local_customFlightmod;
+    std::string local_lastMOD;
 
     std::string flightVersion = readConfigFile(lastMOD, "Main", "FlightVersion"); // Autoincremented version of the flight
     if (flightVersion.empty() || flightVersion == "0") {
@@ -545,8 +578,8 @@ void finalFLTchange() {
 
     std::string elapsedTimeLeg = readConfigFile(lastMOD, "SimScheduler", "SimTime"); // Elapsed time in seconds (String)
     std::string aircraftSignature = readConfigFile(lastMOD, "Sim.0", "Sim"); // PMDG 737 - 800 American Airlines (N666JA)
+
     elapsedTimeLeg = formatDuration(std::stoi(elapsedTimeLeg));
-    std::string dynamicBrief = "Welcome back! ready to resume your " + aircraftSignature + " flight? Currently " + elapsedTimeLeg + " of flight time since your original flight.";
 
     std::string dynamicTitle = "Resume your flight";
     std::string description = "Welcome back! ready to resume your flight?";
@@ -556,28 +589,30 @@ void finalFLTchange() {
     std::map<std::string, std::map<std::string, std::string>> finalsave2;
 
     // Define or compute your variable
+    std::string dynamicBrief = "Welcome back! ready to resume your " + aircraftSignature + " flight? Currently " + elapsedTimeLeg + " of flight time since your original flight.";
     std::string missionLocation;
     std::string isSimOnGround = readConfigFile(lastMOD, "SimVars.0", "SimOnGround"); // True or False (String)
+
+    std::string ZVelBodyAxis = readConfigFile(lastMOD, "SimVars.0", "ZVelBodyAxis"); // Double represented as String
+    if (!isSimOnGround.empty()) {
+        if (isSimOnGround == "False") {
+            // Adjust IAS
+            std::ostringstream stream;
+            stream << std::fixed << std::setprecision(17) << myIASinFPS;
+            ZVelBodyAxis = stream.str();
+        }
+	}
+
     if (!airportName.empty()) {
         if (isSimOnGround == "True") {
-            printf("You are at %s (%s) | %s %u (Suffix is %s)\n", airportName.c_str(), airportICAO.c_str(), parkingGate.c_str(), parkingNumber, parkingGateSuffix.c_str());
-            missionLocation = "$$: " + airportName;
+            // printf("You are at %s (%s) | %s %u (Suffix is %s)\n", airportName.c_str(), airportICAO.c_str(), parkingGate.c_str(), parkingNumber, parkingGateSuffix.c_str());
+            missionLocation = airportName;
         }
         else {
-            printf("You are currently flying near %s (%s)\n", airportName.c_str(), airportICAO.c_str());
-            missionLocation = "$$: Enroute, close to " + airportName;
+            // printf("You are currently flying near %s (%s)\n", airportName.c_str(), airportICAO.c_str());
+            missionLocation = "Enroute, close to " + airportName;
+            dynamicBrief =  "You are enroute, close to " + airportName + ". Ready to resume your flight?";
         }
-    }
-
-    std::string ffSTATE1 = readConfigFile(lastMOD, "FreeFlight", "FirstFlightState");
-    std::string ffSTATE2 = readConfigFile(customFlightmod, "FreeFlight", "FirstFlightState");
-
-    // This is just for consistency as we want to start from the gate if you are resuming a flight from the actual gate
-    if (ffSTATE1 == "PREFLIGHT_PUSHBACK" || ffSTATE1 == "") {
-        ffSTATE1 = "PREFLIGHT_GATE";
-    }
-    if (ffSTATE2 == "PREFLIGHT_PUSHBACK" || ffSTATE2 == "") {
-        ffSTATE2 = "PREFLIGHT_GATE";
     }
 
     // Create a map of changes if the bug was fixed (we also delete the entire Departure and Arrival sections as your flight has been completed)
@@ -592,7 +627,6 @@ void finalFLTchange() {
 			{"GateSuffix", parkingGateSuffix }
         }},
         {"Arrival", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
-        {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
         {"LivingWorld", {
             {"AirportLife", enableAirportLife },
         }},
@@ -603,7 +637,10 @@ void finalFLTchange() {
             {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
+            {"UseLiveWeather", "True" },
             {"WeatherCanBeLive", "True" },
+            {"UseWeatherFile", "False" },
+            {"WeatherPresetFile", "" },
         }},
         {"Main", {
             {"Title", dynamicTitle },
@@ -612,6 +649,10 @@ void finalFLTchange() {
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
             {"OriginalFlight", "" },
+            {"FlightType", "SAVE" },
+        }},
+        {"SimVars.0", {
+           {"ZVelBodyAxis", ZVelBodyAxis },
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
@@ -623,15 +664,17 @@ void finalFLTchange() {
             //               THIS MAP IS FOR LAST.FLT FOR A REGULAR SAVE              //
 
     finalsave1 = {
-        {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
-        {"FreeFlight", {{"FirstFlightState", ffSTATE1}}},
         {"Main", {
             {"Title", dynamicTitle },
             {"MissionLocation", missionLocation },
             {"Description", description },
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
+            {"FlightType", "SAVE" },
+        }},
+        {"SimVars.0", {
+           {"ZVelBodyAxis", ZVelBodyAxis },
         }},
         {"ResourcePath", {
             {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
@@ -640,7 +683,10 @@ void finalFLTchange() {
             {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
+            {"UseLiveWeather", "True" },
             {"WeatherCanBeLive", "True" },
+            {"UseWeatherFile", "False" },
+            {"WeatherPresetFile", "" },
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
@@ -651,16 +697,18 @@ void finalFLTchange() {
 
                 //               THIS MAP IS FOR CUSTOMFLIGHT.FLT FOR A REGULAR SAVE              //
 
-    finalsave2 = {
-        {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
+    finalsave2 = { 
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
-        {"FreeFlight", {{"FirstFlightState", ffSTATE2}}},
         {"Main", {
             {"Title", dynamicTitle },
             {"MissionLocation", missionLocation },
             {"Description", description },
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
+            {"FlightType", "SAVE" },
+        }},
+        {"SimVars.0", {
+           {"ZVelBodyAxis", ZVelBodyAxis },
         }},
         {"ResourcePath", {
             {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
@@ -669,44 +717,51 @@ void finalFLTchange() {
             {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
+            {"UseLiveWeather", "True" },
             {"WeatherCanBeLive", "True" },
+            {"UseWeatherFile", "False" },
+            {"WeatherPresetFile", "" },
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
         }},
     };
 
-    // Fix the MSFS bug where the FirstFlightState is set to LANDING_GATE or WAITING in LAST.FLT
+    // Fix the MSFS bug where the FirstFlightState is set to LANDING_TAXI or LANDING_GATE in LAST.FLT
     fixMSFSbug(lastMOD);
+
+    // Remove [LocalVars.0] section from LAST.FLT
+    // fixLASTflight(lastMOD);
+
     if (isBUGfixed && isFinalSave) {
         isBUGfixed = FALSE; // Reset the flag
-        lastMOD = modifyConfigFile(lastMOD, finalsave);
+        local_lastMOD = modifyConfigFile(lastMOD, finalsave);
     }
     else {
-        lastMOD = modifyConfigFile(lastMOD, finalsave1);
+        local_lastMOD = modifyConfigFile(lastMOD, finalsave1);
     }
 
-    // Fix the MSFS bug where the FirstFlightState is set to LANDING_GATE or WAITING in CUSTOMFLIGHT.FLT
+    // Fix the MSFS bug where the FirstFlightState is set to LANDING_TAXI or LANDING_GATE in CUSTOMFLIGHT.FLT
     fixMSFSbug(customFlightmod);
-    if (isBUGfixed && isFinalSave) {
-        isBUGfixed = FALSE; // Reset the flag
-        customFlightmod = modifyConfigFile(customFlightmod, finalsave);
+    if (isBUGfixedCustom && isFinalSave) {
+        isBUGfixedCustom = FALSE; // Reset the flag
+        local_customFlightmod = modifyConfigFile(customFlightmod, finalsave);
     }
     else {
-        customFlightmod = modifyConfigFile(customFlightmod, finalsave2);
+        local_customFlightmod = modifyConfigFile(customFlightmod, finalsave2);
     }
 
-    lastMOD = NormalizePath(lastMOD);
-    if (!lastMOD.empty())
-        printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", lastMOD.c_str());
+    local_lastMOD = NormalizePath(lastMOD);
+    if (!local_lastMOD.empty())
+        printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", local_lastMOD.c_str());
     else
-        printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", lastMOD.c_str());
+        printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", local_lastMOD.c_str());
 
-    customFlightmod = NormalizePath(customFlightmod);
-    if (!customFlightmod.empty())
-        printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", customFlightmod.c_str());
+    local_customFlightmod = NormalizePath(customFlightmod);
+    if (!local_customFlightmod.empty())
+        printf("\n[FLIGHT SITUATION] ********* \033[35m [ UPDATED %s ] \033[0m *********\n", local_customFlightmod.c_str());
     else
-        printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", customFlightmod.c_str());
+        printf("\n[ERROR] ********* \033[31m [ %s UPDATE FAILED ] \033[0m *********\n", local_customFlightmod.c_str());
 
     // Reset the variables as we are done with them
     airportICAO.clear();        // Reset the airport name
@@ -720,7 +775,7 @@ void initialFLTchange() { // We just wrap the finalFLTchange() function here as 
     // We use the counter to track how many times the sim engine is running while on the menu screen
     if (currentFlight == "MAINMENU.FLT" || currentFlight == "") {
         if (startCounter == 0) { // Only modify the file once, the first time the sim engine is running while on the menu screen
-            finalFLTchange();
+
         }
         startCounter++;
     }
@@ -736,10 +791,9 @@ void saveNotAllowed() {
         // Reset the counter as we are done and going back to the menu
         startCounter = 0;
 
-        // MODIFY the .FLT file to set the FirstFlightState to PREFLIGHT_GATE but only do it for the final save and when flight is LAST.FLT
+        // MODIFY the .FLT file to set the FirstFlightState to firstFlightState* but only do it for the final save and when flight is LAST.FLT
         if (currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") {
             // Make all neccessary changes to the .FLT files
-            printf("\n[INFO] Running finalFLTchange() \n");
             finalFLTchange();
         }
     }
@@ -750,7 +804,7 @@ void saveNotAllowed() {
 
 void saveAndSetZULU() {
     
-    printf("\n[INFO] *** Attempting to save situation and set local ZULU time *** \n");
+    // printf("\n[INFO] *** Attempting to save situation and set local ZULU time *** \n");
 
     if ((currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") && (!isFinalSave)) {
         if (!wasReset) {
@@ -785,7 +839,7 @@ void saveAndSetZULU() {
     else {
         // Handle cases where saves are not allowed
         if (!DEBUG) {
-            printf("\n[INFO] *** executing saveNotAllowed() *** \n");
+            // printf("\n[INFO] *** executing saveNotAllowed() *** \n");
             saveNotAllowed();
         }
         else {
@@ -799,7 +853,7 @@ void simStatus(bool running) {
         if (currentFlight == "MAINMENU.FLT" || currentFlight == "") {
 
             // Green for "ON MENU SCREEN"
-            printf("\n[SIM STATE] ********* \033[32m [ RUNNING ] \033[0m ********* -> (IS ON MENU SCREEN) \n");
+            printf("\n[SIM STATE] ********* \033[32m [ RUNNING ] \033[0m ********* -> (ON MENU SCREEN) \n");
 
             // Set the flag to TRUE when the flight plan is activated and if one is loaded by the user
             if (currentFlight == "MAINMENU.FLT" && currentFlightPlan == "LAST.PLN")
@@ -822,10 +876,71 @@ void simStatus(bool running) {
     }
 }
 
-// Its not an actual save, but a way to key track of what was loaded (e.g what type of flight)
+// Function to calculate the clock position based on current bearing and heading
+int calculateClockPosition(double bearing, double heading) {
+    // Calculate the relative angle
+    double relativeAngle = bearing - heading;
+
+    // Normalize the angle to be within the range of 0 to 360 degrees
+    relativeAngle = fmod(relativeAngle + 360.0, 360.0);
+
+    // Calculate the clock position
+    int clockPosition = static_cast<int>(round(relativeAngle / 30.0)) % 12;
+
+    // Adjust 0 o'clock to 12 o'clock
+    if (clockPosition == 0) {
+        clockPosition = 12;
+    }
+
+    return clockPosition;
+}
+
+double metersToFeet(double meters) {
+    const double metersToFeetConversionFactor = 3.28084;
+    return meters * metersToFeetConversionFactor;
+}
+
+DistanceAndBearing calculateDistanceAndBearing(double lat1, double lon1, double lat2, double lon2) {
+    const double R = 6371000; // Earth's radius in meters
+    const double PI = 3.14159265358979323846;
+
+    double latRad1 = lat1 * (PI / 180);
+    double latRad2 = lat2 * (PI / 180);
+    double deltaLat = (lat2 - lat1) * (PI / 180);
+    double deltaLon = (lon2 - lon1) * (PI / 180);
+
+    // Calculate the distance
+    double a = sin(deltaLat / 2) * sin(deltaLat / 2) +
+        cos(latRad1) * cos(latRad2) * sin(deltaLon / 2) * sin(deltaLon / 2);
+    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    double distance = R * c; // Distance in meters
+
+    // Calculate the bearing
+    double y = sin(deltaLon) * cos(latRad2);
+    double x = cos(latRad1) * sin(latRad2) - sin(latRad1) * cos(latRad2) * cos(deltaLon);
+    double bearingRadians = atan2(y, x);
+    double bearingDegrees = fmod((bearingRadians * 180 / PI + 360), 360); // Convert to degrees and normalize
+
+    // Return both distance and bearing
+    DistanceAndBearing result;
+    result.distance = distance;
+    result.bearing = bearingDegrees;
+    return result;
+}
+
+void handleGroundOperations(const char* airportIdent) {
+    hr = SimConnect_RequestJetwayData(hSimConnect, airportIdent, 0, nullptr);
+    if (hr != S_OK) {
+        printf("Failed to request jetway data\n");
+    }
+}
+
+// We save LAST.FLT to force some features to work properly
 void firstSave() {
+
     isFinalSave = FALSE;
     isFirstSave = TRUE;
+
     printf("\n[NOTICE] Starting flight... \n");
     if (currentFlight == "CUSTOMFLIGHT.FLT" && currentFlightPlan == "CUSTOMFLIGHT.PLN") {
         if (userLoadedPLN) {
@@ -848,8 +963,6 @@ void firstSave() {
         if (!DEBUG) {
             SimConnect_FlightPlanLoad(hSimConnect, ""); // Activate the most current flight plan        
             SimConnect_FlightPlanLoad(hSimConnect, "LAST.PLN"); // Activate the most current flight plan
-            printf("\n[INFO] Initiating first SAVE...\n");
-            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
         }
         else {
             printf("\n[DEBUG] Will skip saving LAST.FLT and Loading the flightplan LAST.PLN as we are in DEBUG mode\n");
@@ -860,8 +973,7 @@ void firstSave() {
         userLoadedPLN = FALSE; // Reset the flag again as there is a special case here
         printf("\n[INFO] User has opened LAST.FLT (for 3 or more legs) to RESUME a flight originally started loading the LAST.PLN file.\nMSFS ATC will be active using the current LAST.PLN file as your active Flight Plan\n");
         if (!DEBUG) {
-            printf("\n[INFO] Initiating first SAVE...\n");
-            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+            // printf("\n[INFO] Initiating first SAVE...\n");
         }
         else {
             printf("\n[DEBUG] Will skip saving LAST.FLT as we are in DEBUG mode\n");
@@ -875,8 +987,7 @@ void firstSave() {
         else if (currentFlight == "LAST.FLT") {
             printf("\n[INFO] User RESUMED a flight with only DEPARTURE or DEPARTURE + ARRIVAL selected.\nNo flight plan is loaded or needed\n");
             if (!DEBUG) {
-                printf("\n[INFO] Initiating first SAVE...\n");
-                SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+                // printf("\n[INFO] Initiating first SAVE...\n");
             }
             else {
                 printf("\n[DEBUG] Will skip saving LAST.FLT as we are in DEBUG mode\n");
@@ -892,12 +1003,11 @@ void firstSave() {
 }
 
 void finalSave() {
-    printf("\n[NOTICE] Saving... (check confirmation below)\n");
+    // printf("\n[NOTICE] Saving... (check confirmation below)\n");
     isFinalSave = TRUE;
     isFirstSave = FALSE;
 
-    // We ONLY save LAST.FLT as CustomFlight is used to start only FRESH flights 
-
+    // We ONLY save LAST.FLT as CustomFlight.FLT is used to start only FRESH flights 
     if (!DEBUG) {
         SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
     }
@@ -915,13 +1025,13 @@ void fixCustomFlight() {
     // Read the current setting from the file so we can set the one that corresponds to the actual state
     std::string gateSTATE = readConfigFile(customFlightfile, "FreeFlight", "FirstFlightState");
     if (gateSTATE.empty()) {
-        gateSTATE = "PREFLIGHT_GATE"; // Set the default value
+        gateSTATE = firstFlightState; // Set the default value
     }
-    else if (gateSTATE == "LANDING_TAXI" || gateSTATE == "LANDING_GATE" || gateSTATE == "WAITING") {
-        gateSTATE = "PREFLIGHT_GATE"; // Set the default value
+    else if (gateSTATE == "LANDING_TAXI" || gateSTATE == "LANDING_GATE") {
+        gateSTATE = firstFlightState; // Set the default value
     }
     else if (gateSTATE == "PREFLIGHT_PUSHBACK") {
-        gateSTATE = "PREFLIGHT_GATE"; // Set the default value
+        gateSTATE = firstFlightState; // Set the default value
     }
 
     std::map<std::string, std::map<std::string, std::string>> fixState = { {
@@ -929,7 +1039,7 @@ void fixCustomFlight() {
              {"LivingWorld", {{"AirportLife", enableAirportLife }}},
              {"FreeFlight", {{"FirstFlightState", gateSTATE }}},
              {"SimScheduler", {{"SimTime", "1.0" }}},
-    } };
+    }};
 
     std::string ffSTATEprev = readConfigFile(customFlightfile, "LivingWorld", "AirportLife");
     if (!ffSTATEprev.empty()) { // Here we handle the case where the key is found in the file
@@ -937,7 +1047,7 @@ void fixCustomFlight() {
         if (ffSTATEprev != enableAirportLife) { // Here we handle the case where the key is found in the file but needs to be updated
             std::string ffSTATE = modifyConfigFile(customFlightfile, fixState);
             if (!ffSTATE.empty()) {
-                printf("[INFO] File %s was *UPDATED*. Setting now is AirportLife=%s\n", narrowFile.c_str(), enableAirportLife.c_str());
+                // printf("[INFO] File %s was *UPDATED*. Setting now is AirportLife=%s\n", narrowFile.c_str(), enableAirportLife.c_str());
             }
             else {
                 printf("[ERROR] Could NOT update %s. Most likely file was in use when trying to modify it\n", narrowFile.c_str());
@@ -947,7 +1057,7 @@ void fixCustomFlight() {
     else { // Here we handle the case where the key is not found in the file
         std::string ffSTATE = modifyConfigFile(customFlightfile, fixState);
         if (!ffSTATE.empty()) {
-            printf("[INFO] File %s now has a *NEW* setting added. AirportLife=%s\n", narrowFile.c_str(), enableAirportLife.c_str());
+            // printf("[INFO] File %s now has a *NEW* setting added. AirportLife=%s\n", narrowFile.c_str(), enableAirportLife.c_str());
         }
         else {
             printf("[ERROR] Could NOT update %s. Most likely file was in use when trying to modify it\n", narrowFile.c_str());
@@ -984,7 +1094,7 @@ int monitorCustomFlightChanges() {
                     fixCustomFlight();
                 }
                 else {
-					printf("\n[INFO] File %s changed but no action taken\n", narrowFile.c_str());
+					// printf("\n[INFO] File %s changed but no action taken\n", narrowFile.c_str());
 				}
 
                 pNotify = pNotify->NextEntryOffset ? reinterpret_cast<FILE_NOTIFY_INFORMATION*>((BYTE*)pNotify + pNotify->NextEntryOffset) : NULL;
