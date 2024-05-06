@@ -393,7 +393,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 fpDisableCount = 0; // Reset the counter
                 userLoadedPLN = FALSE;
 
-                printf("\nLoading World Map...\n");
+                // printf("\nEntering World Map\n");
 
                 // Use GetFP to get the flight plan when we enter the World Map if using SimBrief
                 std::thread(getFP).detach(); // Spawn a new thread to get the flight plan so we don't block the main thread. It will be cleaned up automatically

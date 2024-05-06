@@ -451,31 +451,37 @@ std::string modifyConfigFile(const std::string& filePath, const std::map<std::st
 void fixLASTflight(const std::string& filePath) {
     // Removes the LocalVars section entirely 
 
-    printf("\n[INFO] Temporarily disabled removing [LocalVars.0] from LAST.FLT\n");
-    return;
+    // Regex pattern
+    std::regex pattern("PMDG 7\\d{2}-\\d{3}\\w*");
 
-    std::string MODfile = filePath;
-
-    if (!DEBUG) {
-        std::map<std::string, std::map<std::string, std::string>> fixLAST = {
-            {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
-        };
-        std::string applyFIX = modifyConfigFile(MODfile, fixLAST);
-        MODfile = NormalizePath(MODfile);
-        if (!applyFIX.empty()) {
-            printf("\n[FIX] Removed [LocalVars.0] section from LAST.FLT\n");
+    // Check condition
+    if (std::regex_match(currentAircraft, pattern)) {
+        std::string MODfile = filePath;
+        if (!DEBUG) {
+            std::map<std::string, std::map<std::string, std::string>> fixLAST = {
+                {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
+            };
+            std::string applyFIX = modifyConfigFile(MODfile, fixLAST);
+            MODfile = NormalizePath(MODfile);
+            if (!applyFIX.empty()) {
+                printf("\n[FIX] Removed [LocalVars.0] section from LAST.FLT\n");
+            }
+            else {
+                printf("\n[ERROR] ********* [ %s READ OK, BUT FAILED TO FIX BUG ] *********\n", MODfile.c_str());
+            }
+            return;
         }
         else {
-            printf("\n[ERROR] ********* [ %s READ OK, BUT FAILED TO FIX BUG ] *********\n", MODfile.c_str());
+            printf("\n[DEBUG] ********* [ %s READ OK - NO modifications were made as we are in DEBUG mode ] *********\n", MODfile.c_str());
         }
-        return;
+
+        MODfile = NormalizePath(MODfile);
+        printf("\n[ERROR] ********* [ FAILED TO READ %s ] *********\n", MODfile.c_str());
+
     }
     else {
-        printf("\n[DEBUG] ********* [ %s READ OK - NO modifications were made as we are in DEBUG mode ] *********\n", MODfile.c_str());
-    }
-
-    MODfile = NormalizePath(MODfile);
-    printf("\n[ERROR] ********* [ FAILED TO READ %s ] *********\n", MODfile.c_str());
+		printf("\n[INFO] Skipping [LocalVars.0] removal from LAST.FLT for %s aircraft\n", currentAircraft.c_str());
+	}
 }
 
 void fixMSFSbug(const std::string& filePath) {
@@ -500,6 +506,7 @@ void fixMSFSbug(const std::string& filePath) {
                     {"FreeFlight", {{"FirstFlightState", firstFlightState}} }, // Change the FirstFlightState to firstFlightState* to avoid the MSFS bug/crash
                     {"Main", {{"OriginalFlight", ""}} },
                 };
+                fixLASTflight(MODfile); // Remove the LocalVars section entirely but only if ffSTATE is LANDING_TAXI or LANDING_GATE
             }
             else { // If the FirstFlightState is empty
                 fixState = {
@@ -520,14 +527,14 @@ void fixMSFSbug(const std::string& filePath) {
 
                 if (MODfile == "LAST.FLT" && isFinalSave) {
                     isBUGfixed = TRUE;
-                    printf("Setting isBUGfixed to TRUE\n");
+                    // printf("Setting isBUGfixed to TRUE\n");
 				}
 				else if (MODfile == "CUSTOMFLIGHT.FLT" && isFinalSave) {
 					isBUGfixedCustom = TRUE;
-                    printf("Setting isBUGfixedCustom to TRUE\n");
+                    // printf("Setting isBUGfixedCustom to TRUE\n");
 				}
                 else {
-					printf("NOT setting isBUGfixed or isBUGfixedCustom, this was fixed in the World Map\n");
+					// printf("NOT setting isBUGfixed or isBUGfixedCustom, this was fixed in the World Map\n");
 				}
             }
             else {
