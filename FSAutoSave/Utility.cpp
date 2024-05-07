@@ -233,15 +233,15 @@ std::string getMSFSdir() {
     std::string steam_dir = appData + "\\Microsoft Flight Simulator";
 
     std::string fspath;
-    // Check if the directories exist
-    if (fs::exists(ms_store_dir)) {
+    // Check if the MSFS config file UserCfg.opt exists in the directory
+    if (fs::exists(ms_store_dir + "\\UserCfg.opt")) {
         fspath = ms_store_dir;
         isMSStore = true;
         // Regular expression for the pattern to be searched
         std::regex pattern("LocalCache");
         localStatePath = std::regex_replace(fspath, pattern, "LocalState");
     }
-    else if (fs::exists(steam_dir)) {
+    else if (fs::exists(steam_dir + "\\UserCfg.opt")) {
         fspath = steam_dir;
         isSteam = true;
         localStatePath = fspath;
@@ -453,18 +453,23 @@ void fixLASTflight(const std::string& filePath) {
 
     // Regex pattern
     std::regex pattern("PMDG 7\\d{2}-\\d{3}\\w*");
+    std::map<std::string, std::map<std::string, std::string>> fixLAST;
 
     // Check condition
     if (std::regex_match(currentAircraft, pattern)) {
         std::string MODfile = filePath;
         if (!DEBUG) {
-            std::map<std::string, std::map<std::string, std::string>> fixLAST = {
+            fixLAST = {
                 {"LocalVars.0", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
             };
             std::string applyFIX = modifyConfigFile(MODfile, fixLAST);
             MODfile = NormalizePath(MODfile);
             if (!applyFIX.empty()) {
-                printf("\n[FIX] Removed [LocalVars.0] section from LAST.FLT\n");
+                printf("\n[FIX] Removed [LocalVars.0] section from LAST.FLT and added a new one\n");
+                fixLAST = {
+                    {"LocalVars.0", {{"FLT_File_Loaded", "2"}}},  
+                };
+                modifyConfigFile(filePath, fixLAST);
             }
             else {
                 printf("\n[ERROR] ********* [ %s READ OK, BUT FAILED TO FIX BUG ] *********\n", MODfile.c_str());
@@ -583,8 +588,13 @@ void finalFLTchange() {
 		flightVersion = "1";
 	}
 
+    std::string ActiveFlightPlan = readConfigFile(lastMOD, "ATC_Aircraft.0", "ActiveFlightPlan"); // Set ActiveFlightPlan to False if there is no flight plan loaded but the .FLT thinks it is
+    if (ActiveFlightPlan == "True" && currentFlightPlan == "") {
+        ActiveFlightPlan = "False";
+	}
+
     std::string elapsedTimeLeg = readConfigFile(lastMOD, "SimScheduler", "SimTime"); // Elapsed time in seconds (String)
-    std::string aircraftSignature = readConfigFile(lastMOD, "Sim.0", "Sim"); // PMDG 737 - 800 American Airlines (N666JA)
+    std::string aircraftSignature = readConfigFile(lastMOD, "Sim.0", "Sim"); 
 
     elapsedTimeLeg = formatDuration(std::stoi(elapsedTimeLeg));
 
@@ -634,18 +644,21 @@ void finalFLTchange() {
 			{"GateSuffix", parkingGateSuffix }
         }},
         {"Arrival", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
+        {"ATC_Aircraft.0", {
+            {"xxxActiveFlightPlan", ActiveFlightPlan },
+        }},
         {"LivingWorld", {
             {"AirportLife", enableAirportLife },
         }},
         {"ResourcePath", {
-            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
+            {"xxxPath", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"ObjectFile", {
-            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
+            {"xxxFile", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
             {"UseLiveWeather", "True" },
-            {"WeatherCanBeLive", "True" },
+            {"xxxWeatherCanBeLive", "True" },
             {"UseWeatherFile", "False" },
             {"WeatherPresetFile", "" },
         }},
@@ -655,7 +668,7 @@ void finalFLTchange() {
             {"MissionLocation", missionLocation },
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
-            {"OriginalFlight", "" },
+            {"xxxOriginalFlight", "" },
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
@@ -671,6 +684,9 @@ void finalFLTchange() {
             //               THIS MAP IS FOR LAST.FLT FOR A REGULAR SAVE              //
 
     finalsave1 = {
+        {"ATC_Aircraft.0", {
+            {"xxxActiveFlightPlan", ActiveFlightPlan },
+        }},
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"Main", {
             {"Title", dynamicTitle },
@@ -678,20 +694,21 @@ void finalFLTchange() {
             {"Description", description },
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
+            {"xxxOriginalFlight", "" },
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
            {"ZVelBodyAxis", ZVelBodyAxis },
         }},
         {"ResourcePath", {
-            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
+            {"xxxPath", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"ObjectFile", {
-            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
+            {"xxxFile", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
             {"UseLiveWeather", "True" },
-            {"WeatherCanBeLive", "True" },
+            {"xxxWeatherCanBeLive", "True" },
             {"UseWeatherFile", "False" },
             {"WeatherPresetFile", "" },
         }},
@@ -705,6 +722,9 @@ void finalFLTchange() {
                 //               THIS MAP IS FOR CUSTOMFLIGHT.FLT FOR A REGULAR SAVE              //
 
     finalsave2 = { 
+        {"ATC_Aircraft.0", {
+            {"xxxActiveFlightPlan", ActiveFlightPlan },
+        }},
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"Main", {
             {"Title", dynamicTitle },
@@ -712,20 +732,21 @@ void finalFLTchange() {
             {"Description", description },
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
+            {"xxxOriginalFlight", "" },
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
            {"ZVelBodyAxis", ZVelBodyAxis },
         }},
         {"ResourcePath", {
-            {"Path", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
+            {"xxxPath", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"ObjectFile", {
-            {"File", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
+            {"xxxFile", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
         }},
         {"Weather", {
             {"UseLiveWeather", "True" },
-            {"WeatherCanBeLive", "True" },
+            {"xxxWeatherCanBeLive", "True" },
             {"UseWeatherFile", "False" },
             {"WeatherPresetFile", "" },
         }},
