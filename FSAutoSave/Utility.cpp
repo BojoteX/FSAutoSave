@@ -1,10 +1,9 @@
 #include <Windows.h>
 #include <regex>
-#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <iostream>
-#include "SimConnect.h"
+#include "FSAutoSave.h"
 #include "Globals.h"
 #include "Utility.h"
 
@@ -644,21 +643,11 @@ void finalFLTchange() {
 			{"GateSuffix", parkingGateSuffix }
         }},
         {"Arrival", {{"!DELETE_SECTION!", "!DELETE!"}}},    // Used to DELETE entire section. 
-        {"ATC_Aircraft.0", {
-            {"xxxActiveFlightPlan", ActiveFlightPlan },
-        }},
         {"LivingWorld", {
             {"AirportLife", enableAirportLife },
         }},
-        {"ResourcePath", {
-            {"xxxPath", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
-        }},
-        {"ObjectFile", {
-            {"xxxFile", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
-        }},
         {"Weather", {
             {"UseLiveWeather", "True" },
-            {"xxxWeatherCanBeLive", "True" },
             {"UseWeatherFile", "False" },
             {"WeatherPresetFile", "" },
         }},
@@ -668,7 +657,6 @@ void finalFLTchange() {
             {"MissionLocation", missionLocation },
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
-            {"xxxOriginalFlight", "" },
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
@@ -684,9 +672,6 @@ void finalFLTchange() {
             //               THIS MAP IS FOR LAST.FLT FOR A REGULAR SAVE              //
 
     finalsave1 = {
-        {"ATC_Aircraft.0", {
-            {"xxxActiveFlightPlan", ActiveFlightPlan },
-        }},
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"Main", {
             {"Title", dynamicTitle },
@@ -694,21 +679,13 @@ void finalFLTchange() {
             {"Description", description },
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
-            {"xxxOriginalFlight", "" },
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
            {"ZVelBodyAxis", ZVelBodyAxis },
         }},
-        {"ResourcePath", {
-            {"xxxPath", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
-        }},
-        {"ObjectFile", {
-            {"xxxFile", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
-        }},
         {"Weather", {
             {"UseLiveWeather", "True" },
-            {"xxxWeatherCanBeLive", "True" },
             {"UseWeatherFile", "False" },
             {"WeatherPresetFile", "" },
         }},
@@ -722,9 +699,6 @@ void finalFLTchange() {
                 //               THIS MAP IS FOR CUSTOMFLIGHT.FLT FOR A REGULAR SAVE              //
 
     finalsave2 = { 
-        {"ATC_Aircraft.0", {
-            {"xxxActiveFlightPlan", ActiveFlightPlan },
-        }},
         {"LivingWorld", {{"AirportLife", enableAirportLife}}},
         {"Main", {
             {"Title", dynamicTitle },
@@ -732,21 +706,13 @@ void finalFLTchange() {
             {"Description", description },
             {"AppVersion", "10.0.61355" },
             {"FlightVersion", std::to_string(std::stoi(flightVersion) + 1) },
-            {"xxxOriginalFlight", "" },
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
            {"ZVelBodyAxis", ZVelBodyAxis },
         }},
-        {"ResourcePath", {
-            {"xxxPath", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
-        }},
-        {"ObjectFile", {
-            {"xxxFile", "Missions\\Asobo\\FreeFlights\\FreeFlight\\FreeFlight" },
-        }},
         {"Weather", {
             {"UseLiveWeather", "True" },
-            {"xxxWeatherCanBeLive", "True" },
             {"UseWeatherFile", "False" },
             {"WeatherPresetFile", "" },
         }},

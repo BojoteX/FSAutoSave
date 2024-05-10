@@ -1,5 +1,5 @@
 #include <Windows.h>
-#include "SimConnect.h"
+#include "FSAutoSave.h"
 #include "Globals.h"
 
 std::atomic<bool> isModifyingFile(false);
@@ -63,8 +63,8 @@ std::string localStatePath;
 
 wchar_t GetFPpath[1024];
 
-std::string firstFlightState = "PREFLIGHT_GATE";
-std::string enableAirportLife = "True";
+std::string firstFlightState	= "PREFLIGHT_GATE";
+std::string enableAirportLife	= "False";
 
 bool aircraftCrashed = FALSE;
 bool isOnMenuScreen = FALSE;

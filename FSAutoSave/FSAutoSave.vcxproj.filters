@@ -24,6 +24,9 @@
     <ClCompile Include="Utility.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h">
@@ -35,6 +38,9 @@
     <ClInclude Include="Utility.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="FSAutoSave.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="FSAutoSave.rc">
@@ -42,9 +48,6 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <Image Include="\\LAPTOP-JESUS\FSAutoSave\FSAutoSave\FSAutoSave.ico">
-      <Filter>Resource Files</Filter>
-    </Image>
     <Image Include="FSAutoSave.ico">
       <Filter>Resource Files</Filter>
     </Image>
