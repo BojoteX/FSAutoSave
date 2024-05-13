@@ -165,9 +165,6 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         {
             sJetways* jetway = (sJetways*)&pFacilityData->Data;
 
-            // if (countJetways == parkingIndex && parkingIndex != NULL)
-            // printf("JETWAY: PARKING_GATE %d | PARKING_SUFFIX %d | PARKING_SPOT %d | (Index is %d)\n", jetway->PARKING_GATE, jetway->PARKING_SUFFIX, jetway->PARKING_SPOT, countJetways);
-
             countJetways++;
             break;
         }
@@ -191,15 +188,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                     printf("Closest Jetway is %s %d\n", gateInfo.friendlyName.c_str(), taxiparking->NUMBER);
                 }
 
-                // MODIFY the .FLT file to set the FirstFlightState to firstFlightState* but only do it for the final save and when flight is LAST.FLT
-                finalFLTchange();
-
-                JetwayDistance = NULL;
-                JetwayBearing = NULL;
-
-                // After using the data, reset the values
                 taxiparking = nullptr;
-                parkingIndex = NULL;
             }
 
             countTaxiParking++;
@@ -242,6 +231,8 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 
         // printf("Request ID %u have been processed succesfully, reset values\n", pFacilityData->RequestId);
 
+        finalFLTchange(); // MODIFY the .FLT file to set the FirstFlightState to firstFlightState* but only do it for the final save and when flight is LAST.FLT
+
         // Reset the counters
         countJetways = 0;
         countTaxiParking = 0;
@@ -250,8 +241,14 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         positionRequester = 0; // Reset the position requester
 
         // Reset names after use
-        // airportName = "";
-        // airportICAO = "";
+        airportName = "";
+        airportICAO = "";
+
+        JetwayDistance = NULL;
+        JetwayBearing = NULL;
+
+        // After using the data, reset the values
+        parkingIndex = NULL;
 
         break;
     }
@@ -548,6 +545,19 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             }
             else {
                 printf("\n[SITUATION EVENT] Flight Saved: %s\n", currentSaveFlight.c_str());
+
+                if (currentFlight == "LAST.FLT") {
+                    auto last_modified = fs::last_write_time(currentFlightPath);
+                    printf("\nWaiting SAVE to complete... ");
+                    while (true) {
+                        Sleep(100); // Check every 100 milliseconds
+                        if (hasFileUpdated(currentFlightPath, last_modified)) {
+                            printf("Done! SAVE completed\n");
+                            break; // File has been updated
+                        }
+                    }
+                }
+
             }
 
             currentStatus();

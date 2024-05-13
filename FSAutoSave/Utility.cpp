@@ -1010,24 +1010,9 @@ void finalSave() {
 
     // We ONLY save LAST.FLT as CustomFlight.FLT is used to start only FRESH flights 
     if (!DEBUG) {
-
-        // auto last_modified = fs::last_write_time(currentFlightPath);
-        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
-
         // Get the current position and the closest airport (including gate)
         SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_CLOSEST_AIRPORT, 666, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
-
-        /*
-        printf("\nWaiting SAVE to complete... ");
-        while (true) {
-            Sleep(100); // Check every 100 milliseconds
-            if (hasFileUpdated(currentFlightPath, last_modified)) {
-                printf("Done! SAVE completed\n");
-                break; // File has been updated
-            }
-        }
-        */
-
+        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
     }
     else {
         printf("\n[DEBUG] Will skip saving as we are in DEBUG mode\n");
