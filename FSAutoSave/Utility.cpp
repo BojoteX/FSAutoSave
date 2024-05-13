@@ -788,7 +788,7 @@ void saveNotAllowed() {
         // MODIFY the .FLT file to set the FirstFlightState to firstFlightState* but only do it for the final save and when flight is LAST.FLT
         if (currentFlight == "LAST.FLT" || currentFlight == "CUSTOMFLIGHT.FLT") {
             // Make all neccessary changes to the .FLT files
-            finalFLTchange();
+            // finalFLTchange(); // I'm already calling this in the main function
         }
     }
     else {
