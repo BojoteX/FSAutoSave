@@ -52,14 +52,14 @@ void copyFile(const std::string& source, const std::string& destination) {
 void SafeCopyPath(const wchar_t* source) {
     errno_t err = wcscpy_s(GetFPpath, _countof(GetFPpath), source);
     if (err != 0) {
-        wprintf(L"[ERROR] Could not get GetFP.exe path. Error code: %d\n", err);
+        wprintf(L"\n[ERROR] Could not get GetFP.exe path. Error code: %d\n", err);
     }
     else {
         if (fs::exists(GetFPpath)) {
-            wprintf(L"[INFO] Simbrief integration enabled using %s\n", GetFPpath);
+            wprintf(L"\n[INFO] Simbrief integration enabled using %s\n", GetFPpath);
         }
         else {
-            wprintf(L"[INFO] You tried to enable Simbrief integration with GetFP.exe, but path %s is wrong (file does not exist)\n", GetFPpath);
+            wprintf(L"\n[INFO] You tried to enable Simbrief integration with GetFP.exe, but path %s is wrong (file does not exist)\n", GetFPpath);
             std::fill(GetFPpath, GetFPpath + _countof(GetFPpath), L'\0');  // Properly clear the array
         }
     }
