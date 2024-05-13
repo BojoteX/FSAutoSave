@@ -996,6 +996,13 @@ void firstSave() {
     }
 }
 
+// Helper function to check if the file has been updated
+bool hasFileUpdated(const fs::path& file_path, const fs::file_time_type& old_time) {
+    if (!fs::exists(file_path)) return false;
+    auto current_time = fs::last_write_time(file_path);
+    return current_time != old_time;
+}
+
 void finalSave() {
     // printf("\n[NOTICE] Saving... (check confirmation below)\n");
     isFinalSave = TRUE;
@@ -1003,7 +1010,24 @@ void finalSave() {
 
     // We ONLY save LAST.FLT as CustomFlight.FLT is used to start only FRESH flights 
     if (!DEBUG) {
+
+        // auto last_modified = fs::last_write_time(currentFlightPath);
         SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+
+        // Get the current position and the closest airport (including gate)
+        SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_CLOSEST_AIRPORT, 666, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+
+        /*
+        printf("\nWaiting SAVE to complete... ");
+        while (true) {
+            Sleep(100); // Check every 100 milliseconds
+            if (hasFileUpdated(currentFlightPath, last_modified)) {
+                printf("Done! SAVE completed\n");
+                break; // File has been updated
+            }
+        }
+        */
+
     }
     else {
         printf("\n[DEBUG] Will skip saving as we are in DEBUG mode\n");

@@ -18,6 +18,7 @@ std::string wideToNarrow(const std::wstring& wstr);
 std::string GetVersionInfo(const std::string& info);
 std::string WideCharToUTF8(const wchar_t* wideChars);
 
+void finalFLTchange();
 void copyFile(const std::string& source, const std::string& destination);
 void handleGroundOperations(const char* airportIdent);
 void simStatus(bool running);

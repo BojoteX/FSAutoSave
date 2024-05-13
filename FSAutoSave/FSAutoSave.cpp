@@ -5,6 +5,8 @@
 #include "Globals.h"
 #include "Utility.h"
 
+int positionRequester = 0;
+
 void initApp() {
 
     // Run monitoring for CustomFlight.FLT file writes in a separate thread.
@@ -144,7 +146,10 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         case SIMCONNECT_FACILITY_DATA_AIRPORT: {
             sAirport* airport = (sAirport*)&pFacilityData->Data;
 
-            printf("Closest airport is %s (%s)\n", airport->name, airport->icao);
+            if (positionRequester == 0) {
+				printf("Closest airport is %s (%s)\n", airport->name, airport->icao);
+			}
+
             airportName = std::string(airport->name);
             airportICAO = std::string(airport->icao);
             break;
@@ -175,12 +180,19 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 GateInfo gateInfo = formatGateName(taxiparking->NAME);
                 GateInfo gateSuffixInfo = formatGateName(taxiparking->SUFFIX);
                 int clockPos = calculateClockPosition(JetwayBearing, myHeading);
-                printf("Closest Jetway is %s %d\n", gateInfo.friendlyName.c_str(), taxiparking->NUMBER);
-                std::string gateString = "Closest Jetway is " + gateInfo.friendlyName + " " + std::to_string(taxiparking->NUMBER) + " at " + airportName + ". Distance from your aircraft is " + std::to_string(int(metersToFeet(JetwayDistance))) + " meters (" + std::to_string(int(JetwayDistance)) + " feet) at your " + std::to_string(clockPos) + " o'clock";
-                sendText(hSimConnect, gateString);
+
                 parkingGate = gateInfo.gateString;
                 parkingGateSuffix = gateSuffixInfo.gateString;
                 parkingNumber = taxiparking->NUMBER;
+
+                if (positionRequester == 0) {
+                    std::string gateString = "Closest Jetway is " + gateInfo.friendlyName + " " + std::to_string(taxiparking->NUMBER) + " at " + airportName + ". Distance from your aircraft is " + std::to_string(int(metersToFeet(JetwayDistance))) + " meters (" + std::to_string(int(JetwayDistance)) + " feet) at your " + std::to_string(clockPos) + " o'clock";
+                    sendText(hSimConnect, gateString);
+                    printf("Closest Jetway is %s %d\n", gateInfo.friendlyName.c_str(), taxiparking->NUMBER);
+                }
+
+                // MODIFY the .FLT file to set the FirstFlightState to firstFlightState* but only do it for the final save and when flight is LAST.FLT
+                finalFLTchange();
 
                 JetwayDistance = NULL;
                 JetwayBearing = NULL;
@@ -233,6 +245,9 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
         // Reset the counters
         countJetways = 0;
         countTaxiParking = 0;
+
+        // Reset the requester after use
+        positionRequester = 0; // Reset the position requester
 
         // Reset names after use
         // airportName = "";
@@ -446,17 +461,19 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 printf("Aircraft Position: Not available or in Main Menu\n");
             }
             else {
-                if (pS->sim_on_ground) {
-                    if (pS->airspeed < 1) {
-                        printf("Currently parked/stopped at Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+                if (positionRequester == 0) {
+                    if (pS->sim_on_ground) {
+                        if (pS->airspeed < 1) {
+                            printf("Currently parked/stopped at Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
+                        }
+                        else {
+                            printf("On the ground, moving at %.0f knots. Heading: %.0f degrees. Current position is Latitude: %f - Longitude: %f\n", pS->airspeed, pS->mag_heading, pS->latitude, pS->longitude);
+                        }
                     }
                     else {
-                        printf("On the ground, moving at %.0f knots. Heading: %.0f degrees. Current position is Latitude: %f - Longitude: %f\n", pS->airspeed, pS->mag_heading, pS->latitude, pS->longitude);
+                        printf("Current position is Latitude: %f - Longitude: %f - Altitude: %.0f feet - Ground Speed: %.0f knots - Heading: %.0f degrees\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed, pS->mag_heading);
+
                     }
-                }
-                else {
-                    printf("Current position is Latitude: %f - Longitude: %f - Altitude: %.0f feet - Ground Speed: %.0f knots - Heading: %.0f degrees\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed, pS->mag_heading);
- 
                 }
             }
             break;
@@ -720,11 +737,12 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                     currentStatus();
                 } // Same here... check all conditions OR if flight was never initilized we assume the app was started while already in the sim
                 else if((!isOnMenuScreen && !isFirstSave && isFinalSave) || !flightInitialized) { // This is the case when we are in the sim and we press ESC
+
                     // Save the situation (without needing to press CTRL+ALT+S or ESC)
                     SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_SITUATION_SAVE, 98, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
 
                     // Get the current position and the closest airport (including gate)
-                    SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_CLOSEST_AIRPORT, 0, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+                    // SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_CLOSEST_AIRPORT, 666, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
 				}
                 else {
 					printf("\n[PAUSE EX1] Simulator is paused\n");
@@ -744,7 +762,11 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             {
             case EVENT_CLOSEST_AIRPORT: { // CTRL+ALT+P - Request current position, then request the closest airport and gate
 
-                printf("\n[STATUS] Will try to obtain our current position and GATE...\n");
+                positionRequester = evt->dwData;
+
+                if (positionRequester == 0) {
+                    printf("\n[STATUS] Will try to obtain our current position and GATE...\n");
+                }
 
                 // Get our current position so we can determine the nearest airport
                 hr = SimConnect_RequestDataOnSimObject(hSimConnect, REQUEST_POSITION_ONCE, DEFINITION_POSITION_DATA, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_ONCE, SIMCONNECT_DATA_REQUEST_FLAG_DEFAULT);
@@ -769,8 +791,8 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                         firstSave();
                     }
                     else if (evt->dwData == 55) { // USER USER SAVE (CTRL+ALT+S triggered)
+                        sendText(hSimConnect, "Flight saved succesfully! you can now quit your session and RESUME the flight by simply loading LAST.FLT in the world map screen.");
                         finalSave();
-                        sendText(hSimConnect, "Saving, please wait...");
                     }
                     else if (evt->dwData == 98) { // NORMAL SAVE (ESC triggered)
                         printf("\n[EVENT_SITUATION_SAVE] Final save before exiting.. please wait.\n");
