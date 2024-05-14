@@ -546,6 +546,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             else {
                 printf("\n[SITUATION EVENT] Flight Saved: %s\n", currentSaveFlight.c_str());
 
+                /*
                 if (currentFlight == "LAST.FLT") {
                     auto last_modified = fs::last_write_time(currentFlightPath);
                     printf("\nWaiting SAVE to complete... ");
@@ -557,6 +558,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                         }
                     }
                 }
+                */
 
             }
 
