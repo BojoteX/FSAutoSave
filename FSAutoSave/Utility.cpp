@@ -616,6 +616,17 @@ void finalFLTchange() {
             std::ostringstream stream;
             stream << std::fixed << std::setprecision(17) << myIASinFPS;
             ZVelBodyAxis = stream.str();
+
+            /*
+            std::map<std::string, std::map<std::string, std::string>> fixIAS = {
+                {"SimVarForSpawningInTheAir", {
+                    {"IAS", ZVelBodyAxis },
+                    {"Altitude", std::to_string(myAltitude) },
+                }},
+            };
+            modifyConfigFile(lastMOD, fixIAS);
+            */
+
         }
 	}
 

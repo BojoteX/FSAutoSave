@@ -34,7 +34,7 @@ void initApp() {
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE LATITUDE", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE LONGITUDE", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE ALTITUDE", "feet");
-    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "AIRSPEED INDICATED", "feet per second"); // Used for ZVelBodyAxis in [SimVars.0] to adjust speed to IAS
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "GROUND VELOCITY", "feet per second"); // Used for ZVelBodyAxis in [SimVars.0] to adjust speed
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "GROUND VELOCITY", "knots");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE HEADING DEGREES MAGNETIC", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "SIM ON GROUND", "Bool");
