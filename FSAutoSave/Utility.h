@@ -37,6 +37,7 @@ void firstSave();
 void finalSave();
 void fixCustomFlight();
 void waitForEnter();
+void saveDuringPause();
 
 double metersToFeet(double meters);
 

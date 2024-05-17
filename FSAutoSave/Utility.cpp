@@ -1163,6 +1163,29 @@ void waitForEnter() {
     } while (buffer[0] != '\n'); // Check directly for newline character
 }
 
+void saveDuringPause() {
+    wasSoftPaused = TRUE; // Set it so than we simulation starts we know it came from a soft pause
+
+    // Check if we are in the menu screen before starting the flight by checking the following conditions
+    if (!isFinalSave && !isOnMenuScreen && isFirstSave && flightInitialized) {
+        isPauseBeforeStart = TRUE;
+        printf("\n[STATUS] Simulator is in Briefing screen before start (Press READY TO FLY)\n");
+        currentStatus();
+    } // Same here... check all conditions OR if flight was never initilized we assume the app was started while already in the sim
+    else if ((!isOnMenuScreen && !isFirstSave && isFinalSave) || !flightInitialized) { // This is the case when we are in the sim and we press ESC
+
+        // Save the situation (without needing to press CTRL+ALT+S or ESC)
+        SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_SITUATION_SAVE, 98, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+
+        // Get the current position and the closest airport (including gate)
+        // SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_CLOSEST_AIRPORT, 666, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
+    }
+    else {
+        printf("\n[PAUSE EX1] Simulator is paused\n");
+        currentStatus();
+    }
+}
+
 std::string GetVersionInfo(const std::string& info) {
     UINT size = 0;
     LPBYTE lpBuffer = NULL;
