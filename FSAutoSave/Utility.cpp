@@ -610,22 +610,26 @@ void finalFLTchange() {
     std::string isSimOnGround = readConfigFile(lastMOD, "SimVars.0", "SimOnGround"); // True or False (String)
 
     std::string ZVelBodyAxis = readConfigFile(lastMOD, "SimVars.0", "ZVelBodyAxis"); // Double represented as String
+    std::string IASinFPS = ZVelBodyAxis;
     if (!isSimOnGround.empty()) {
         if (isSimOnGround == "False") {
             // Adjust IAS
-            std::ostringstream stream;
-            stream << std::fixed << std::setprecision(17) << myIASinFPS;
-            ZVelBodyAxis = stream.str();
+            std::ostringstream streamTAS;
+            streamTAS << std::fixed << std::setprecision(17) << myTASinFPS;
 
-            /*
+            std::ostringstream streamIAS;
+            streamIAS << std::fixed << std::setprecision(17) << myIASinFPS;
+
+            ZVelBodyAxis = streamTAS.str();
+            IASinFPS = streamIAS.str();
+
             std::map<std::string, std::map<std::string, std::string>> fixIAS = {
                 {"SimVarForSpawningInTheAir", {
-                    {"IAS", ZVelBodyAxis },
+                    {"IAS", IASinFPS },
                     {"Altitude", std::to_string(myAltitude) },
                 }},
             };
             modifyConfigFile(lastMOD, fixIAS);
-            */
 
         }
 	}

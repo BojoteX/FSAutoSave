@@ -35,6 +35,7 @@ double myLatitude		= 0.0;
 double myLongitude		= 0.0;
 double myAltitude		= 0.0;
 double myIASinFPS		= 0.0;
+double myTASinFPS		= 0.0;
 double myAirspeed		= 0.0;
 double myHeading		= 0.0;
 double isSimOnGround	= 0.0;
