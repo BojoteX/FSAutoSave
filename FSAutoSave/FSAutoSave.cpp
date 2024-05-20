@@ -37,6 +37,7 @@ void initApp() {
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "AIRSPEED INDICATED", "feet per second"); // Used [SimVarForSpawningInTheAir] IAS=
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "GROUND VELOCITY", "feet per second"); // Used for ZVelBodyAxis in [SimVars.0] to adjust speed
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "GROUND VELOCITY", "knots");
+    hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "TRAILING EDGE FLAPS LEFT ANGLE", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "PLANE HEADING DEGREES MAGNETIC", "degrees");
     hr = SimConnect_AddToDataDefinition(hSimConnect, DEFINITION_POSITION_DATA, "SIM ON GROUND", "Bool");
 
@@ -450,6 +451,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
             myIASinFPS	    = pS->IASinFPS;
             myTASinFPS      = pS->TASinFPS;
             myAirspeed      = pS->airspeed;
+            myFlaps         = pS->flaps;
             myHeading       = pS->mag_heading;
             isSimOnGround   = pS->sim_on_ground;
 

@@ -625,8 +625,9 @@ void finalFLTchange() {
 
             std::map<std::string, std::map<std::string, std::string>> fixIAS = {
                 {"SimVarForSpawningInTheAir", {
-                    {"IAS", IASinFPS },
+                    {"IAS", std::to_string(myIASinFPS) },
                     {"Altitude", std::to_string(myAltitude) },
+                    {"FlapsDegree", std::to_string(myFlaps) },
                 }},
             };
             modifyConfigFile(lastMOD, fixIAS);
@@ -675,7 +676,7 @@ void finalFLTchange() {
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
-           {"ZVelBodyAxis", ZVelBodyAxis },
+           {"xZVelBodyAxis", ZVelBodyAxis },
         }},
         {"Briefing", {
             {"BriefingText", dynamicBrief },
@@ -697,7 +698,7 @@ void finalFLTchange() {
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
-           {"ZVelBodyAxis", ZVelBodyAxis },
+           {"xZVelBodyAxis", ZVelBodyAxis },
         }},
         {"Weather", {
             {"UseLiveWeather", "True" },
@@ -724,7 +725,7 @@ void finalFLTchange() {
             {"FlightType", "SAVE" },
         }},
         {"SimVars.0", {
-           {"ZVelBodyAxis", ZVelBodyAxis },
+           {"xZVelBodyAxis", ZVelBodyAxis },
         }},
         {"Weather", {
             {"UseLiveWeather", "True" },
@@ -1027,7 +1028,19 @@ void finalSave() {
     if (!DEBUG) {
         // Get the current position and the closest airport (including gate)
         SimConnect_TransmitClientEvent(hSimConnect, 0, EVENT_CLOSEST_AIRPORT, 666, SIMCONNECT_GROUP_PRIORITY_HIGHEST, SIMCONNECT_EVENT_FLAG_GROUPID_IS_PRIORITY);
-        SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+
+        if (currentFlight == "LAST.FLT") {
+            auto last_modified = fs::last_write_time(currentFlightPath);
+            SimConnect_FlightSave(hSimConnect, "LAST.FLT", "My previous flight", "FSAutoSave Generated File", 0);
+            printf("\nWaiting SAVE to complete... ");
+            while (true) {
+                Sleep(100); // Check every 100 milliseconds
+                if (hasFileUpdated(currentFlightPath, last_modified)) {
+                    printf("Done! SAVE completed\n");
+                    break; // File has been updated
+                }
+            }
+        }
     }
     else {
         printf("\n[DEBUG] Will skip saving as we are in DEBUG mode\n");

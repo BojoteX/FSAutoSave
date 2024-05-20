@@ -41,6 +41,7 @@ extern double myAltitude;
 extern double myIASinFPS;
 extern double myTASinFPS;
 extern double myAirspeed;
+extern double myFlaps;
 extern double myHeading;
 extern double isSimOnGround;
 extern double JetwayDistance;
@@ -100,7 +101,7 @@ struct sJetways { int PARKING_GATE; int PARKING_SUFFIX; int PARKING_SPOT; };
 struct sTaxiParkings { int NAME; int SUFFIX; unsigned NUMBER; };
 struct GateInfo { std::string friendlyName; std::string gateString; };
 struct SimDayOfYear { double dayOfYear; };
-struct AircraftPosition { double latitude; double longitude; double altitude; double IASinFPS; double TASinFPS; double airspeed; double mag_heading; double sim_on_ground; };
+struct AircraftPosition { double latitude; double longitude; double altitude; double IASinFPS; double TASinFPS; double airspeed; double flaps; double mag_heading; double sim_on_ground; };
 struct CameraState { double state; };
 
 #pragma pack(pop)
