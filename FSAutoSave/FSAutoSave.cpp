@@ -462,7 +462,7 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                 printf("Aircraft Position: Not available or in Main Menu\n");
             }
             else {
-                if (positionRequester == 0) {
+                // if (positionRequester == 0) {
                     if (pS->sim_on_ground) {
                         if (pS->airspeed < 1) {
                             printf("Currently parked/stopped at Latitude: %f - Longitude: %f\n", pS->latitude, pS->longitude);
@@ -472,10 +472,9 @@ void CALLBACK Dispatcher(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
                         }
                     }
                     else {
-                        printf("Current position is Latitude: %f - Longitude: %f - Altitude: %.0f feet - Ground Speed: %.0f knots - Heading: %.0f degrees\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed, pS->mag_heading);
-
+                        printf("Current position is Latitude: %f - Longitude: %f - Altitude: %.0f feet - Ground Speed: %.0f knots - Heading: %.0f degrees - Flaps: %.0f degrees - IAS: %.0f feet/sec\n", pS->latitude, pS->longitude, pS->altitude, pS->airspeed, pS->mag_heading, pS->flaps, pS->IASinFPS);
                     }
-                }
+                // }
             }
             break;
         }
